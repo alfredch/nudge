@@ -19,3 +19,4 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Credentials im Secret Service (Fallback: Datei mit 0600).
 - `nudge daemon`: Echtzeit-Empfang, Verlauf in SQLite, Notifications mit Prioritäten-Mapping,
   Sammel-Notification für Meldungen aus der Offline-Zeit, Löschen erst nach dem Speichern.
+- HTML-Meldungen behalten Fett, Kursiv und Unterstrichen. Farben entfallen, Links werden als „Text (URL)“ angezeigt.

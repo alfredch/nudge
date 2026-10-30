@@ -75,6 +75,7 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
         history: History::open(&history_path)?,
     };
 
+    notify::init().await;
     let mut sigterm = signal(SignalKind::terminate())?;
     tokio::select! {
         exit = daemon.run_loop() => {
