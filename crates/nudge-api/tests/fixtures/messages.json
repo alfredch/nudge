@@ -1,0 +1,82 @@
+{
+  "messages": [
+    {
+      "id": 3,
+      "id_str": "3",
+      "umid": 11,
+      "umid_str": "11",
+      "title": "Backup",
+      "message": "Backup finished",
+      "app": "Server",
+      "aid": 21,
+      "aid_str": "21",
+      "icon": "server",
+      "date": 1761830000,
+      "queued_date": 1761830000,
+      "dispatched_date": 1761830001,
+      "priority": 0,
+      "sound": "pushover",
+      "acked": 0
+    },
+    {
+      "id": 4,
+      "id_str": "4",
+      "umid": 12,
+      "umid_str": "12",
+      "message": "No title given",
+      "app": "Cron",
+      "aid": 22,
+      "aid_str": "22",
+      "icon": "cron",
+      "date": 1761830100,
+      "priority": -1,
+      "acked": 0
+    },
+    {
+      "id": 5,
+      "id_str": "5",
+      "umid": 13,
+      "umid_str": "13",
+      "title": "Release",
+      "message": "Version <b>1.2</b> is out",
+      "app": "CI",
+      "aid": 23,
+      "aid_str": "23",
+      "icon": "ci",
+      "date": 1761830200,
+      "priority": 0,
+      "url": "https://example.org/release",
+      "url_title": "Release notes",
+      "html": 1,
+      "acked": 0
+    },
+    {
+      "id": 7,
+      "id_str": "7",
+      "umid": 15,
+      "umid_str": "15",
+      "title": "Disk full",
+      "message": "/var is at 99%",
+      "app": "Monitoring",
+      "aid": 24,
+      "aid_str": "24",
+      "icon": "monitor",
+      "date": 1761830300,
+      "priority": 2,
+      "sound": "siren",
+      "receipt": "rcpt123abc",
+      "acked": 0
+    }
+  ],
+  "user": {
+    "quiet_hours": false,
+    "is_android_licensed": false,
+    "is_ios_licensed": false,
+    "is_desktop_licensed": true
+  },
+  "device": {
+    "name": "testdevice"
+  },
+  "status": 1,
+  "request": "6d4b1b8a-4f0e-4e3b-9a2a-000000000001"
+}
