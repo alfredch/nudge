@@ -11,12 +11,14 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::actions::{self, Clipboard};
 use crate::backoff::Backoff;
+use crate::cache::{self, Cache};
 use crate::config::Config;
 use crate::credentials::{self, Backend, Credentials};
 use crate::history::History;
 use crate::instance;
 use crate::notify::{self, Notifier};
 use crate::paths::{APP_ID, Paths};
+use crate::sound;
 use crate::wake::{self, WakeReceiver};
 
 /// No keep-alive within this time means the connection is dead.
@@ -63,6 +65,8 @@ struct Daemon {
     credentials: Credentials,
     history: History,
     notifier: Notifier,
+    cache: Cache,
+    sound: sound::Player,
     config: watch::Receiver<Config>,
     backoff: Backoff,
     wake: WakeReceiver,
@@ -117,6 +121,8 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
     });
 
     let mut daemon = Daemon {
+        cache: Cache::new(paths.cache.clone(), client.clone()),
+        sound: sound::Player::spawn(),
         client,
         user_agent,
         credentials,
@@ -295,7 +301,11 @@ impl Daemon {
         // the history skips them and nothing is announced twice or lost.
         if let Some(highest) = fetched.highest_id() {
             self.client
-                .delete_up_to(&self.credentials.secret, device, highest)
+                .delete_up_to(
+                    &self.credentials.secret,
+                    &self.credentials.device_id,
+                    highest,
+                )
                 .await?;
             debug!("deleted messages up to id {highest} on the server");
         }
@@ -321,7 +331,7 @@ impl Daemon {
         }
     }
 
-    async fn announce(&self, messages: &[&Message], mode: Mode) {
+    async fn announce(&mut self, messages: &[&Message], mode: Mode) {
         let quiet = self.config.borrow().quiet_hours.active();
         let (hidden, visible): (Vec<&Message>, Vec<&Message>) = messages
             .iter()
@@ -356,7 +366,7 @@ impl Daemon {
         }
     }
 
-    async fn show(&self, message: &Message, quiet: bool) {
+    async fn show(&mut self, message: &Message, quiet: bool) {
         let action = match notify::display_for(message, quiet) {
             Some(d) if d.persistent => "shown, persistent",
             Some(d) if quiet && d.urgency == notify::Urgency::Low && message.priority == 0 => {
@@ -365,7 +375,23 @@ impl Daemon {
             _ => "shown",
         };
         log_message(message, action);
-        report(self.notifier.show_message(message, quiet, None).await);
+
+        let icon = match message.icon.as_deref() {
+            Some(name) => self.cache.get(cache::Kind::Icon, name).await,
+            None => None,
+        };
+        report(
+            self.notifier
+                .show_message(message, quiet, icon.as_deref())
+                .await,
+        );
+
+        let sound = self.config.borrow().sound.clone();
+        if let Some(name) = sound::sound_for(message, &sound, quiet)
+            && let Some(path) = self.cache.get(cache::Kind::Sound, name).await
+        {
+            self.sound.play(path, sound.volume);
+        }
     }
 }
 

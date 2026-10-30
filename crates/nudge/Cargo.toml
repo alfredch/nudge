@@ -18,6 +18,7 @@ gethostname.workspace = true
 jiff.workspace = true
 nudge-api.workspace = true
 oo7.workspace = true
+rodio.workspace = true
 rpassword.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -30,6 +31,7 @@ zbus.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+wiremock.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
