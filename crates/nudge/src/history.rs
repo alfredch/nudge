@@ -135,6 +135,15 @@ impl History {
         )?)
     }
 
+    /// Deletes messages received more than `keep` ago.
+    pub fn prune(&mut self, keep: std::time::Duration) -> Result<usize> {
+        let keep = i64::try_from(keep.as_secs()).unwrap_or(i64::MAX);
+        let cutoff = unix_now().saturating_sub(keep);
+        Ok(self
+            .conn
+            .execute("DELETE FROM messages WHERE received_at < ?1", [cutoff])?)
+    }
+
     /// Whether the user acknowledged this receipt on this computer.
     pub fn is_acked(&self, receipt: &Receipt) -> Result<bool> {
         Ok(self.conn.query_row(
@@ -214,6 +223,26 @@ mod tests {
         assert_eq!(h.mark_acked(&r).unwrap(), 1);
         assert!(h.is_acked(&r).unwrap());
         assert!(!h.is_acked(&Receipt::new("other")).unwrap());
+    }
+
+    #[test]
+    fn prune_removes_old_entries() {
+        let mut h = History::in_memory().unwrap();
+        h.store(&DeviceId::new("dev"), &fetched()).unwrap();
+        h.conn
+            .execute(
+                "UPDATE messages SET received_at = received_at - 10 * 86400 WHERE id = 3",
+                [],
+            )
+            .unwrap();
+        let day = std::time::Duration::from_secs(86_400);
+        assert_eq!(h.prune(day * 30).unwrap(), 0);
+        assert_eq!(h.prune(day * 5).unwrap(), 1);
+        let count: i64 = h
+            .conn
+            .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]

@@ -9,8 +9,10 @@ pub const APP_ID: &str = "io.github.alfredch.Nudge";
 /// XDG locations used by nudge.
 #[derive(Debug, Clone)]
 pub struct Paths {
+    pub config: PathBuf,
     pub data: PathBuf,
     pub state: PathBuf,
+    pub cache: PathBuf,
 }
 
 impl Paths {
@@ -22,9 +24,15 @@ impl Paths {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| dirs.data_local_dir().join("state"));
         Ok(Self {
+            config: dirs.config_dir().to_path_buf(),
             data: dirs.data_dir().to_path_buf(),
             state,
+            cache: dirs.cache_dir().to_path_buf(),
         })
+    }
+
+    pub fn config_file(&self) -> PathBuf {
+        self.config.join("config.toml")
     }
 
     pub fn history_db(&self) -> PathBuf {

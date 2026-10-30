@@ -1,5 +1,6 @@
 mod actions;
 mod backoff;
+mod config;
 mod credentials;
 mod daemon;
 mod history;

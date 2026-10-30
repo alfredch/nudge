@@ -5,11 +5,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use nudge_api::{Client, DEFAULT_PUSH_URL, Frame, Message, PushStream};
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::watch;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::actions::{self, Clipboard};
 use crate::backoff::Backoff;
+use crate::config::Config;
 use crate::credentials::{self, Backend, Credentials};
 use crate::history::History;
 use crate::instance;
@@ -25,6 +27,8 @@ const RELOAD_DELAY: Duration = Duration::from_secs(1);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 /// A connection that lasted this long resets the backoff.
 const STABLE_SESSION: Duration = Duration::from_secs(60);
+/// How often old messages are removed from the history.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 
 /// Why the daemon stopped.
 #[derive(Debug)]
@@ -59,14 +63,18 @@ struct Daemon {
     credentials: Credentials,
     history: History,
     notifier: Notifier,
+    config: watch::Receiver<Config>,
     backoff: Backoff,
     wake: WakeReceiver,
+    last_prune: Option<Instant>,
 }
 
 pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
     let Some(_instance) = instance::acquire(APP_ID).await? else {
         return Ok(Exit::AlreadyRunning);
     };
+    let config_path = paths.config_file();
+    let config = Config::load(&config_path)?;
     let Some((credentials, backend)) = credentials::load(paths).await? else {
         return Ok(Exit::NeedsLogin(
             "Not logged in. Run `nudge login` first.".to_owned(),
@@ -100,14 +108,24 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
     };
     tokio::spawn(handler.run(clicks));
 
+    let (config_tx, config_rx) = watch::channel(config);
+    let mut sighup = signal(SignalKind::hangup())?;
+    tokio::spawn(async move {
+        while sighup.recv().await.is_some() {
+            reload(&config_path, &config_tx);
+        }
+    });
+
     let mut daemon = Daemon {
         client,
         user_agent,
         credentials,
         history: History::open(&history_path)?,
         notifier: notifier.clone(),
+        config: config_rx,
         backoff: Backoff::default(),
         wake: wake::spawn(),
+        last_prune: None,
     };
 
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -212,6 +230,7 @@ impl Daemon {
 
     /// Fetch → persist → notify → delete on server.
     async fn sync(&mut self, mode: Mode) -> Result<()> {
+        self.prune_history();
         let device = &self.credentials.device_id;
         let fetched = self
             .client
@@ -283,8 +302,27 @@ impl Daemon {
         Ok(())
     }
 
+    /// At most once a day; failures only cost disk space.
+    fn prune_history(&mut self) {
+        if self
+            .last_prune
+            .is_some_and(|t| t.elapsed() < PRUNE_INTERVAL)
+        {
+            return;
+        }
+        self.last_prune = Some(Instant::now());
+        let Some(keep) = self.config.borrow().history.retention() else {
+            return;
+        };
+        match tokio::task::block_in_place(|| self.history.prune(keep)) {
+            Ok(0) => {}
+            Ok(n) => info!("removed {n} old message(s) from the history"),
+            Err(e) => warn!("cannot prune history: {e:#}"),
+        }
+    }
+
     async fn announce(&self, messages: &[&Message], mode: Mode) {
-        let quiet = false;
+        let quiet = self.config.borrow().quiet_hours.active();
         let (hidden, visible): (Vec<&Message>, Vec<&Message>) = messages
             .iter()
             .copied()
@@ -319,15 +357,14 @@ impl Daemon {
     }
 
     async fn show(&self, message: &Message, quiet: bool) {
-        let persistent = notify::display_for(message, quiet).is_some_and(|d| d.persistent);
-        log_message(
-            message,
-            if persistent {
-                "shown, persistent"
-            } else {
-                "shown"
-            },
-        );
+        let action = match notify::display_for(message, quiet) {
+            Some(d) if d.persistent => "shown, persistent",
+            Some(d) if quiet && d.urgency == notify::Urgency::Low && message.priority == 0 => {
+                "shown quietly"
+            }
+            _ => "shown",
+        };
+        log_message(message, action);
         report(self.notifier.show_message(message, quiet, None).await);
     }
 }
@@ -342,6 +379,17 @@ fn log_message(message: &Message, action: &str) {
         message.app,
         message.display_title()
     );
+}
+
+/// Re-reads the configuration; an invalid file keeps the current one.
+fn reload(path: &std::path::Path, config: &watch::Sender<Config>) {
+    match Config::load(path) {
+        Ok(new) => {
+            info!("configuration reloaded");
+            config.send_replace(new);
+        }
+        Err(e) => warn!("{e:#}; keeping the current configuration"),
+    }
 }
 
 /// Sleeps before the next attempt; a wake event cuts the wait short.
@@ -376,7 +424,6 @@ fn is_session_rejected(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::watch;
 
     #[tokio::test(start_paused = true)]
     async fn wake_event_cuts_wait_short_and_resets_backoff() {

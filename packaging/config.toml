@@ -1,0 +1,28 @@
+# nudge configuration: ~/.config/nudge/config.toml
+#
+# Every setting is optional; the values below are the defaults.
+# After editing, reload a running daemon with:
+#   systemctl --user kill --signal=HUP nudge    (or: pkill -HUP -x nudge)
+
+[sound]
+# Play message sounds.
+enabled = true
+# Volume in percent (0-100).
+volume = 100
+# Sound for messages that do not name one. Any Pushover sound name,
+# e.g. "pushover", "bike", "cosmic", or "none" for silence.
+default = "pushover"
+
+[quiet_hours]
+# During quiet hours, messages with priority -1 and 0 arrive silently:
+# no sound and no banner, only in the notification list.
+# Priority 1 (high) and 2 (emergency) are not affected.
+enabled = false
+# Local time, 24-hour format. The period may span midnight.
+start = "22:00"
+end = "07:00"
+
+[history]
+# Delete messages from the local history after this many days.
+# 0 keeps them forever.
+keep_days = 365
