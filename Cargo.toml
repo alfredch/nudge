@@ -1,0 +1,40 @@
+[workspace]
+resolver = "3"
+members = ["crates/nudge-api", "crates/nudge"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/alfredch/nudge"
+authors = ["Alfred Keller"]
+
+[workspace.dependencies]
+nudge-api = { path = "crates/nudge-api", version = "0.1.0" }
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = "2.5.8"
+wiremock = "0.6.5"
+zeroize = "1.9.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
