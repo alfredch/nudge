@@ -23,3 +23,10 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Sofortiges Neuverbinden nach Resume aus dem Standby und bei Netzwerkwechsel (logind, NetworkManager).
 - Nur ein Daemon gleichzeitig (D-Bus-Name `io.github.alfredch.Nudge`).
 - HTML-Meldungen behalten Fett, Kursiv und Unterstrichen. Farben entfallen, Links werden als „Text (URL)“ angezeigt.
+- Buttons an Notifications: „Acknowledge“ für Notfallmeldungen (Priorität 2), „Open link“ und „Copy“
+  (mit `wl-copy` oder `xclip`). Wiederholungen einer Notfallmeldung ersetzen die vorherige Notification.
+- Sounds der Meldungen (rodio), Lautstärke und Default-Sound konfigurierbar.
+- Icons der absendenden Apps. Icons und Sounds werden einmalig nach `~/.cache/nudge/` geladen.
+- Konfigurationsdatei `~/.config/nudge/config.toml`, neu laden mit `SIGHUP`. Beispiel: `packaging/config.toml`.
+- Ruhezeiten: Priorität -1 und 0 kommen still an.
+- Aufbewahrungsdauer für den Verlauf (Default 365 Tage).

@@ -27,11 +27,15 @@ Ergänzt `PLAN.md`. Bei Widerspruch gilt dieses Dokument.
 | Toolchain | `rust-toolchain.toml` mit fester Version 1.99.1, Edition 2024 |
 | Releases | glibc, x86_64 und aarch64, `.deb` (cargo-deb) und AUR (PKGBUILD) |
 | Git | Haupt-Branch `main` |
+| Ruhezeiten | Priorität -1 und 0 werden still zugestellt: Urgency low, kein Ton. Priorität 1 und 2 sind nicht betroffen. Keine Ausnahmen pro App (wer durchkommen will, sendet mit Priorität 1). |
+| Kopieren | Über `wl-copy` (Wayland) oder `xclip` (X11/Xwayland). Der Button erscheint nur, wenn eines davon installiert ist. Paket: `Recommends: wl-clipboard`. |
+| Notifications | Direkt über zbus statt notify-rust: eine Verbindung für `Notify` und die Action-Signale, keine `unwrap()` in Fremdcode. |
+| Sounds | rodio, das Audiogerät wird pro Sound geöffnet. Ohne `sound`-Feld wird `sound.default` gespielt (Default `pushover`, wie in der Message-API dokumentiert). `none` und `vibrate` sind still. Laufzeitabhängigkeit: libasound2. |
 
 ## Offene Punkte
 
 - Flatpak: später.
-- Ob Live-Meldungen eine eigene Ruhezeiten-Ausnahme pro App bekommen sollen: in M4 entscheiden.
+- Wie Emergency-Wiederholungen beim Client ankommen (neue `id` mit gleichem `receipt`?), steht nicht in der Doku. nudge ersetzt die Notification über den Receipt. Beim M4-Test prüfen und hier festhalten.
 
 ## Verifiziert am echten Server (2026-10-30, `cargo test -p nudge-api --test live -- --ignored`)
 
