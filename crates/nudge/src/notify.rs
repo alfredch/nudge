@@ -1,53 +1,85 @@
 //! Desktop notifications via the freedesktop D-Bus interface.
+//!
+//! Sending and listening for actions share one connection: some servers
+//! deliver `ActionInvoked` only to the connection that created the
+//! notification.
 
-use std::sync::OnceLock;
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use anyhow::Result;
-use notify_rust::{Hint, Notification, Timeout, Urgency};
-use nudge_api::Message;
+use anyhow::{Context as _, Result};
+use futures_util::StreamExt;
+use nudge_api::{Message, MessageId, Receipt};
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
+use zbus::zvariant::Value;
 
+const BUS_NAME: &str = "org.freedesktop.Notifications";
+const OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 const APP_NAME: &str = "Nudge";
 /// Lines listed in a summary notification before "and N more".
 const SUMMARY_LINES: usize = 5;
 /// Tags every markup-capable server understands (GNOME supports no more).
 const ALLOWED_TAGS: [&str; 3] = ["b", "i", "u"];
+/// Notifications whose actions are remembered. Beyond that the oldest are
+/// forgotten; servers do not report every notification as closed.
+const MAX_TRACKED: usize = 256;
 
-/// Whether the notification server parses body markup.
-static BODY_MARKUP: OnceLock<bool> = OnceLock::new();
-
-/// Queries the server capabilities once. Without `body-markup`, the spec
-/// requires clients to send plain text.
-pub async fn init() {
-    let caps = tokio::task::spawn_blocking(notify_rust::get_capabilities).await;
-    let markup = match caps {
-        Ok(Ok(caps)) => {
-            debug!(?caps, "notification server capabilities");
-            caps.iter().any(|c| c == "body-markup")
-        }
-        Ok(Err(e)) => {
-            warn!("cannot query notification server: {e}");
-            false
-        }
-        Err(e) => {
-            warn!("cannot query notification server: {e}");
-            false
-        }
-    };
-    let _ = BODY_MARKUP.set(markup);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Urgency {
+    Low = 0,
+    Normal = 1,
+    Critical = 2,
 }
 
-fn markup() -> bool {
-    BODY_MARKUP.get().copied().unwrap_or(false)
+/// Buttons on a message notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Acknowledge,
+    OpenLink,
+    Copy,
 }
 
-/// Plain text prepared for the body: escaped if the server parses markup.
-fn text(raw: &str) -> String {
-    if markup() {
-        escape(raw)
-    } else {
-        raw.to_owned()
+impl Action {
+    const ALL: [Action; 3] = [Action::Acknowledge, Action::OpenLink, Action::Copy];
+
+    fn key(self) -> &'static str {
+        match self {
+            Action::Acknowledge => "acknowledge",
+            Action::OpenLink => "open-link",
+            Action::Copy => "copy",
+        }
     }
+
+    fn label(self) -> &'static str {
+        match self {
+            Action::Acknowledge => "Acknowledge",
+            Action::OpenLink => "Open link",
+            Action::Copy => "Copy",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.key() == key)
+    }
+}
+
+/// What an action needs to know about the message it belongs to.
+#[derive(Debug, Clone)]
+pub struct Target {
+    pub message: MessageId,
+    pub receipt: Option<Receipt>,
+    pub url: Option<String>,
+    /// Plain message text, for copying.
+    pub text: String,
+}
+
+/// A button the user clicked.
+#[derive(Debug)]
+pub struct Invoked {
+    pub action: Action,
+    pub target: Target,
 }
 
 /// How a message is shown, derived from its priority.
@@ -58,11 +90,14 @@ pub struct Display {
     pub persistent: bool,
 }
 
-/// `None` means history only, no notification.
-pub fn display_for(message: &Message) -> Option<Display> {
+/// `None` means history only, no notification. During quiet hours,
+/// priority -1 and 0 are delivered silently (low urgency, no banner on
+/// most servers); priority 1 and 2 are not affected.
+pub fn display_for(message: &Message, quiet: bool) -> Option<Display> {
     let (urgency, persistent) = match message.priority {
         i8::MIN..=-2 => return None,
         -1 => (Urgency::Low, false),
+        0 if quiet => (Urgency::Low, false),
         0 => (Urgency::Normal, false),
         1 => (Urgency::Critical, false),
         2.. => (Urgency::Critical, message.requires_persistent_display()),
@@ -73,68 +108,344 @@ pub fn display_for(message: &Message) -> Option<Display> {
     })
 }
 
-pub async fn show_message(message: &Message) -> Result<()> {
-    let Some(display) = display_for(message) else {
-        return Ok(());
-    };
-    let mut body = match (message.html, markup()) {
-        (true, true) => sanitize_html(&message.message),
-        (true, false) => html_to_text(&message.message),
-        (false, _) => text(&message.message),
-    };
-    if let Some(url) = &message.url {
-        let label = message.url_title.as_deref().unwrap_or(url);
-        body.push_str("\n\n");
-        body.push_str(&text(label));
-        if label != url {
-            body.push_str(": ");
-            body.push_str(&text(url));
+/// Connection to the notification server.
+#[derive(Clone)]
+pub struct Notifier {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    conn: zbus::Connection,
+    /// The server parses body markup; otherwise the spec requires plain text.
+    markup: bool,
+    /// The server shows action buttons.
+    actions: bool,
+    /// A clipboard tool is available.
+    copy: bool,
+    state: Mutex<State>,
+}
+
+/// One notification to send.
+struct Note<'a> {
+    summary: &'a str,
+    body: &'a str,
+    urgency: Urgency,
+    persistent: bool,
+    icon: Option<&'a Path>,
+    actions: &'a [Action],
+    replaces: u32,
+}
+
+impl Notifier {
+    /// Connects to the session bus and starts listening for actions.
+    /// Clicked buttons arrive on the returned receiver.
+    pub async fn connect(copy: bool) -> Result<(Self, mpsc::UnboundedReceiver<Invoked>)> {
+        let conn = zbus::Connection::session()
+            .await
+            .context("cannot connect to the D-Bus session bus")?;
+        let proxy = zbus::Proxy::new(&conn, BUS_NAME, OBJECT_PATH, BUS_NAME).await?;
+
+        let caps: Vec<String> = match proxy.call("GetCapabilities", &()).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                warn!("cannot query notification server: {e}");
+                Vec::new()
+            }
+        };
+        debug!(?caps, "notification server capabilities");
+        let has = |cap: &str| caps.iter().any(|c| c == cap);
+
+        // Subscribe before the first notification, so no click is missed.
+        let invoked = proxy.receive_signal("ActionInvoked").await?;
+        let closed = proxy.receive_signal("NotificationClosed").await?;
+
+        let notifier = Self {
+            inner: Arc::new(Inner {
+                conn,
+                markup: has("body-markup"),
+                actions: has("actions"),
+                copy,
+                state: Mutex::default(),
+            }),
+        };
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(notifier.clone().listen(invoked, closed, tx));
+        Ok((notifier, rx))
+    }
+
+    async fn listen(
+        self,
+        mut invoked: zbus::proxy::SignalStream<'static>,
+        mut closed: zbus::proxy::SignalStream<'static>,
+        tx: mpsc::UnboundedSender<Invoked>,
+    ) {
+        loop {
+            tokio::select! {
+                Some(msg) = invoked.next() => {
+                    let Ok((id, key)) = msg.body().deserialize::<(u32, String)>() else {
+                        continue;
+                    };
+                    let target = self.state().targets.get(&id).cloned();
+                    if let (Some(action), Some(target)) = (Action::from_key(&key), target) {
+                        debug!("notification {id}: {key}");
+                        if tx.send(Invoked { action, target }).is_err() {
+                            return;
+                        }
+                    }
+                }
+                Some(msg) = closed.next() => {
+                    if let Ok((id, _reason)) = msg.body().deserialize::<(u32, u32)>() {
+                        self.state().forget(id);
+                    }
+                }
+                else => {
+                    warn!("notification server signals ended, buttons no longer work");
+                    return;
+                }
+            }
         }
     }
 
-    let mut n = base(message.display_title(), &body);
-    n.urgency(display.urgency);
-    if display.persistent {
-        n.timeout(Timeout::Never).hint(Hint::Resident(true));
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
-    n.show_async().await?;
-    Ok(())
+
+    /// Plain text prepared for the body: escaped if the server parses markup.
+    fn text(&self, raw: &str) -> String {
+        if self.inner.markup {
+            escape(raw)
+        } else {
+            raw.to_owned()
+        }
+    }
+
+    pub async fn show_message(
+        &self,
+        message: &Message,
+        quiet: bool,
+        icon: Option<&Path>,
+    ) -> Result<()> {
+        let Some(display) = display_for(message, quiet) else {
+            return Ok(());
+        };
+        let mut body = match (message.html, self.inner.markup) {
+            (true, true) => sanitize_html(&message.message),
+            (true, false) => html_to_text(&message.message),
+            (false, _) => self.text(&message.message),
+        };
+        if let Some(url) = &message.url {
+            let label = message.url_title.as_deref().unwrap_or(url);
+            body.push_str("\n\n");
+            body.push_str(&self.text(label));
+            if label != url {
+                body.push_str(": ");
+                body.push_str(&self.text(url));
+            }
+        }
+
+        let link = message.url.as_deref().filter(|u| is_web_url(u));
+        let mut actions = Vec::new();
+        if self.inner.actions {
+            if display.persistent && message.can_acknowledge() {
+                actions.push(Action::Acknowledge);
+            }
+            if link.is_some() {
+                actions.push(Action::OpenLink);
+            }
+            if self.inner.copy {
+                actions.push(Action::Copy);
+            }
+        }
+
+        // Emergency retries replace the notification of the same receipt.
+        let replaces = message
+            .receipt
+            .as_ref()
+            .and_then(|r| self.state().by_receipt.get(r).copied())
+            .unwrap_or(0);
+        let id = self
+            .notify(Note {
+                summary: message.display_title(),
+                body: &body,
+                urgency: display.urgency,
+                persistent: display.persistent,
+                icon,
+                actions: &actions,
+                replaces,
+            })
+            .await?;
+
+        if !actions.is_empty() {
+            let text = if message.html {
+                html_to_text(&message.message)
+            } else {
+                message.message.clone()
+            };
+            self.state().track(
+                id,
+                Target {
+                    message: message.id,
+                    receipt: message.receipt.clone(),
+                    url: link.map(str::to_owned),
+                    text,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// One notification for messages that arrived while nudge was not running.
+    pub async fn show_summary(&self, messages: &[&Message], quiet: bool) -> Result<()> {
+        let summary = match messages.len() {
+            1 => "1 message while you were away".to_owned(),
+            n => format!("{n} messages while you were away"),
+        };
+        let mut lines: Vec<String> = messages
+            .iter()
+            .take(SUMMARY_LINES)
+            .map(|m| self.text(&format!("{}: {}", m.app, m.display_title())))
+            .collect();
+        if messages.len() > SUMMARY_LINES {
+            lines.push(format!("… and {} more", messages.len() - SUMMARY_LINES));
+        }
+        self.notify(Note {
+            summary: &summary,
+            body: &lines.join("\n"),
+            urgency: if quiet { Urgency::Low } else { Urgency::Normal },
+            persistent: false,
+            icon: None,
+            actions: &[],
+            replaces: 0,
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Status notification from nudge itself.
+    pub async fn show_info(&self, summary: &str, body: &str, critical: bool) -> Result<()> {
+        self.notify(Note {
+            summary,
+            body: &self.text(body),
+            urgency: if critical {
+                Urgency::Critical
+            } else {
+                Urgency::Normal
+            },
+            persistent: critical,
+            icon: None,
+            actions: &[],
+            replaces: 0,
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Closes the notification showing this receipt, if there is one.
+    pub async fn close_receipt(&self, receipt: &Receipt) -> Result<()> {
+        let Some(id) = self.state().forget_receipt(receipt) else {
+            return Ok(());
+        };
+        self.inner
+            .conn
+            .call_method(
+                Some(BUS_NAME),
+                OBJECT_PATH,
+                Some(BUS_NAME),
+                "CloseNotification",
+                &(id,),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn notify(&self, note: Note<'_>) -> Result<u32> {
+        let icon = note.icon.and_then(Path::to_str).unwrap_or_default();
+        let actions: Vec<&str> = note
+            .actions
+            .iter()
+            .flat_map(|a| [a.key(), a.label()])
+            .collect();
+        let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
+        hints.insert("urgency", Value::U8(note.urgency as u8));
+        // nudge plays message sounds itself.
+        hints.insert("suppress-sound", Value::Bool(true));
+        if note.persistent {
+            hints.insert("resident", Value::Bool(true));
+        }
+        // -1: server default; 0: never expires.
+        let timeout: i32 = if note.persistent { 0 } else { -1 };
+
+        let reply = self
+            .inner
+            .conn
+            .call_method(
+                Some(BUS_NAME),
+                OBJECT_PATH,
+                Some(BUS_NAME),
+                "Notify",
+                &(
+                    APP_NAME,
+                    note.replaces,
+                    icon,
+                    note.summary,
+                    note.body,
+                    actions,
+                    hints,
+                    timeout,
+                ),
+            )
+            .await
+            .context("cannot show notification")?;
+        Ok(reply.body().deserialize()?)
+    }
 }
 
-/// One notification for messages that arrived while nudge was not running.
-pub async fn show_summary(messages: &[&Message]) -> Result<()> {
-    let summary = match messages.len() {
-        1 => "1 message while you were away".to_owned(),
-        n => format!("{n} messages while you were away"),
-    };
-    let mut lines: Vec<String> = messages
-        .iter()
-        .take(SUMMARY_LINES)
-        .map(|m| text(&format!("{}: {}", m.app, m.display_title())))
-        .collect();
-    if messages.len() > SUMMARY_LINES {
-        lines.push(format!("… and {} more", messages.len() - SUMMARY_LINES));
-    }
-    base(&summary, &lines.join("\n")).show_async().await?;
-    Ok(())
+/// Targets of notifications with buttons, by notification id.
+#[derive(Default)]
+struct State {
+    targets: BTreeMap<u32, Target>,
+    /// Emergency notifications, so retries and acknowledgements find them.
+    by_receipt: HashMap<Receipt, u32>,
 }
 
-/// Status notification from nudge itself.
-pub async fn show_info(summary: &str, body: &str, critical: bool) -> Result<()> {
-    let mut n = base(summary, &text(body));
-    if critical {
-        n.urgency(Urgency::Critical)
-            .timeout(Timeout::Never)
-            .hint(Hint::Resident(true));
+impl State {
+    fn track(&mut self, id: u32, target: Target) {
+        if let Some(receipt) = &target.receipt {
+            self.by_receipt.insert(receipt.clone(), id);
+        }
+        self.targets.insert(id, target);
+        while self.targets.len() > MAX_TRACKED {
+            if let Some((&oldest, _)) = self.targets.first_key_value() {
+                self.forget(oldest);
+            }
+        }
     }
-    n.show_async().await?;
-    Ok(())
+
+    fn forget(&mut self, id: u32) {
+        if let Some(Target {
+            receipt: Some(receipt),
+            ..
+        }) = self.targets.remove(&id)
+            && self.by_receipt.get(&receipt) == Some(&id)
+        {
+            self.by_receipt.remove(&receipt);
+        }
+    }
+
+    fn forget_receipt(&mut self, receipt: &Receipt) -> Option<u32> {
+        let id = self.by_receipt.remove(receipt)?;
+        self.targets.remove(&id);
+        Some(id)
+    }
 }
 
-fn base(summary: &str, body: &str) -> Notification {
-    let mut n = Notification::new();
-    n.appname(APP_NAME).summary(summary).body(body);
-    n
+/// Only web links are opened; other schemes could start arbitrary handlers.
+pub fn is_web_url(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://")
 }
 
 /// Escapes text for the notification body, which servers parse as markup.
@@ -255,8 +566,7 @@ fn href(tag: &str) -> Option<String> {
         _ => value.split(|c: char| c.is_whitespace()).next()?,
     };
     let url = decode_entities(url);
-    let lower = url.to_ascii_lowercase();
-    (lower.starts_with("https://") || lower.starts_with("http://")).then_some(url)
+    is_web_url(&url).then_some(url)
 }
 
 fn decode_entities(text: &str) -> String {
@@ -308,7 +618,7 @@ mod tests {
 
     #[test]
     fn priority_mapping() {
-        let d = |p: i8| display_for(&msg(serde_json::json!({"id": 1, "priority": p})));
+        let d = |p: i8| display_for(&msg(serde_json::json!({"id": 1, "priority": p})), false);
         assert_eq!(d(-2), None);
         assert_eq!(d(-1).map(|d| d.urgency), Some(Urgency::Low));
         assert_eq!(d(0).map(|d| d.urgency), Some(Urgency::Normal));
@@ -331,7 +641,70 @@ mod tests {
     #[test]
     fn acked_emergency_is_not_persistent() {
         let m = msg(serde_json::json!({"id": 1, "priority": 2, "acked": 1}));
-        assert_eq!(display_for(&m).map(|d| d.persistent), Some(false));
+        assert_eq!(display_for(&m, false).map(|d| d.persistent), Some(false));
+    }
+
+    #[test]
+    fn quiet_hours_silence_only_low_and_normal() {
+        let d = |p: i8| display_for(&msg(serde_json::json!({"id": 1, "priority": p})), true);
+        assert_eq!(d(-2), None);
+        assert_eq!(d(-1).map(|d| d.urgency), Some(Urgency::Low));
+        assert_eq!(d(0).map(|d| d.urgency), Some(Urgency::Low));
+        assert_eq!(d(1).map(|d| d.urgency), Some(Urgency::Critical));
+        assert_eq!(
+            d(2).map(|d| (d.urgency, d.persistent)),
+            Some((Urgency::Critical, true))
+        );
+    }
+
+    fn target(id: u64, receipt: Option<&str>) -> Target {
+        Target {
+            message: MessageId(id),
+            receipt: receipt.map(Receipt::new),
+            url: None,
+            text: String::new(),
+        }
+    }
+
+    #[test]
+    fn retry_replaces_and_close_forgets_receipt() {
+        let mut s = State::default();
+        let r = Receipt::new("r1");
+        s.track(7, target(1, Some("r1")));
+        assert_eq!(s.by_receipt.get(&r), Some(&7));
+        // A retry shown in a new notification takes over the receipt.
+        s.track(9, target(2, Some("r1")));
+        s.forget(7);
+        assert_eq!(s.by_receipt.get(&r), Some(&9));
+        assert_eq!(s.forget_receipt(&r), Some(9));
+        assert!(!s.targets.contains_key(&9));
+    }
+
+    #[test]
+    fn tracking_is_bounded() {
+        let mut s = State::default();
+        for id in 0..(MAX_TRACKED as u32 + 10) {
+            s.track(id, target(u64::from(id), Some(&format!("r{id}"))));
+        }
+        assert_eq!(s.targets.len(), MAX_TRACKED);
+        assert_eq!(s.by_receipt.len(), MAX_TRACKED);
+        assert!(!s.targets.contains_key(&0));
+    }
+
+    #[test]
+    fn action_keys_round_trip() {
+        for a in Action::ALL {
+            assert_eq!(Action::from_key(a.key()), Some(a));
+        }
+        assert_eq!(Action::from_key("default"), None);
+    }
+
+    #[test]
+    fn only_web_urls() {
+        assert!(is_web_url("https://x.org"));
+        assert!(is_web_url("HTTP://x.org"));
+        assert!(!is_web_url("file:///etc/passwd"));
+        assert!(!is_web_url("javascript:alert(1)"));
     }
 
     #[test]

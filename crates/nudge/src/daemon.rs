@@ -8,12 +8,14 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, trace, warn};
 
+use crate::actions::{self, Clipboard};
 use crate::backoff::Backoff;
 use crate::credentials::{self, Backend, Credentials};
 use crate::history::History;
+use crate::instance;
+use crate::notify::{self, Notifier};
 use crate::paths::{APP_ID, Paths};
 use crate::wake::{self, WakeReceiver};
-use crate::{instance, notify};
 
 /// No keep-alive within this time means the connection is dead.
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -56,6 +58,7 @@ struct Daemon {
     user_agent: String,
     credentials: Credentials,
     history: History,
+    notifier: Notifier,
     backoff: Backoff,
     wake: WakeReceiver,
 }
@@ -81,24 +84,38 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
         history_path.display()
     );
 
+    let clipboard = Clipboard::detect();
+    match &clipboard {
+        Some(c) => info!("copying to the clipboard with {}", c.program().display()),
+        None => info!("no wl-copy or xclip found, copying is disabled"),
+    }
+    let (notifier, clicks) = Notifier::connect(clipboard.is_some()).await?;
+    let client = Client::new(&user_agent)?;
+    let handler = actions::Handler {
+        client: client.clone(),
+        secret: credentials.secret.clone(),
+        notifier: notifier.clone(),
+        history: History::open(&history_path)?,
+        clipboard,
+    };
+    tokio::spawn(handler.run(clicks));
+
     let mut daemon = Daemon {
-        client: Client::new(&user_agent)?,
+        client,
         user_agent,
         credentials,
         history: History::open(&history_path)?,
+        notifier: notifier.clone(),
         backoff: Backoff::default(),
         wake: wake::spawn(),
     };
 
-    notify::init().await;
     let mut sigterm = signal(SignalKind::terminate())?;
     tokio::select! {
         exit = daemon.run_loop() => {
             if let Exit::NeedsLogin(reason) = &exit {
                 error!("{reason}");
-                if let Err(e) = notify::show_info("Nudge stopped", reason, true).await {
-                    warn!("cannot show notification: {e:#}");
-                }
+                report(notifier.show_info("Nudge stopped", reason, true).await);
             }
             Ok(exit)
         }
@@ -135,18 +152,9 @@ impl Daemon {
                         "connection lost: {e:#}; reconnecting in {}s",
                         delay.as_secs()
                     );
-                    self.wait(delay).await;
+                    wait(&mut self.wake, &mut self.backoff, delay).await;
                 }
             }
-        }
-    }
-
-    /// Sleeps before the next attempt; a wake event cuts the wait short.
-    async fn wait(&mut self, delay: Duration) {
-        tokio::select! {
-            _ = sleep(delay) => {}
-            // `changed` fails if the watcher is gone; the branch is then disabled.
-            Ok(()) = self.wake.changed() => self.backoff.reset(),
         }
     }
 
@@ -236,20 +244,31 @@ impl Daemon {
             );
         }
 
-        let new: Vec<&Message> = fetched
+        let mut new: Vec<&Message> = fetched
             .messages
             .iter()
             .filter(|m| inserted.messages.contains(&m.id))
             .collect();
-        announce(&new, mode).await;
+        // Retries of an emergency the user already acknowledged here.
+        tokio::task::block_in_place(|| {
+            new.retain(|m| match &m.receipt {
+                Some(r) if m.priority >= 2 && self.history.is_acked(r).unwrap_or(false) => {
+                    log_message(m, "already acknowledged");
+                    false
+                }
+                _ => true,
+            });
+        });
+        self.announce(&new, mode).await;
         if inserted.malformed > 0 {
             report(
-                notify::show_info(
-                    "Unreadable message",
-                    "Nudge received a message it could not read. It was saved to the history.",
-                    false,
-                )
-                .await,
+                self.notifier
+                    .show_info(
+                        "Unreadable message",
+                        "Nudge received a message it could not read. It was saved to the history.",
+                        false,
+                    )
+                    .await,
             );
         }
 
@@ -263,53 +282,54 @@ impl Daemon {
         }
         Ok(())
     }
-}
 
-async fn announce(messages: &[&Message], mode: Mode) {
-    let (hidden, visible): (Vec<&Message>, Vec<&Message>) = messages
-        .iter()
-        .copied()
-        .partition(|m| notify::display_for(m).is_none());
-    for m in hidden {
-        log_message(m, "history only");
-    }
-
-    if mode == Mode::Live || visible.len() <= 1 {
-        for m in visible {
-            show(m).await;
+    async fn announce(&self, messages: &[&Message], mode: Mode) {
+        let quiet = false;
+        let (hidden, visible): (Vec<&Message>, Vec<&Message>) = messages
+            .iter()
+            .copied()
+            .partition(|m| notify::display_for(m, quiet).is_none());
+        for m in hidden {
+            log_message(m, "history only");
         }
-        return;
-    }
 
-    let (persistent, rest): (Vec<&Message>, Vec<&Message>) = visible
-        .into_iter()
-        .partition(|m| m.requires_persistent_display());
-    for m in persistent {
-        show(m).await;
-    }
-    match rest.as_slice() {
-        [] => {}
-        [single] => show(single).await,
-        _ => {
-            for m in &rest {
-                log_message(m, "summarized");
+        if mode == Mode::Live || visible.len() <= 1 {
+            for m in visible {
+                self.show(m, quiet).await;
             }
-            report(notify::show_summary(&rest).await);
+            return;
+        }
+
+        let (persistent, rest): (Vec<&Message>, Vec<&Message>) = visible
+            .into_iter()
+            .partition(|m| m.requires_persistent_display());
+        for m in persistent {
+            self.show(m, quiet).await;
+        }
+        match rest.as_slice() {
+            [] => {}
+            [single] => self.show(single, quiet).await,
+            _ => {
+                for m in &rest {
+                    log_message(m, "summarized");
+                }
+                report(self.notifier.show_summary(&rest, quiet).await);
+            }
         }
     }
-}
 
-async fn show(message: &Message) {
-    let persistent = notify::display_for(message).is_some_and(|d| d.persistent);
-    log_message(
-        message,
-        if persistent {
-            "shown, persistent"
-        } else {
-            "shown"
-        },
-    );
-    report(notify::show_message(message).await);
+    async fn show(&self, message: &Message, quiet: bool) {
+        let persistent = notify::display_for(message, quiet).is_some_and(|d| d.persistent);
+        log_message(
+            message,
+            if persistent {
+                "shown, persistent"
+            } else {
+                "shown"
+            },
+        );
+        report(self.notifier.show_message(message, quiet, None).await);
+    }
 }
 
 /// Logs metadata only; the message text stays out of the journal.
@@ -322,6 +342,15 @@ fn log_message(message: &Message, action: &str) {
         message.app,
         message.display_title()
     );
+}
+
+/// Sleeps before the next attempt; a wake event cuts the wait short.
+async fn wait(wake: &mut WakeReceiver, backoff: &mut Backoff, delay: Duration) {
+    tokio::select! {
+        _ = sleep(delay) => {}
+        // `changed` fails if the watcher is gone; the branch is then disabled.
+        Ok(()) = wake.changed() => backoff.reset(),
+    }
 }
 
 async fn close(stream: PushStream) {
@@ -347,29 +376,14 @@ fn is_session_rejected(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nudge_api::{DeviceId, Secret};
     use tokio::sync::watch;
-
-    fn daemon(wake: WakeReceiver) -> Daemon {
-        Daemon {
-            client: Client::new("nudge-test").unwrap(),
-            user_agent: "nudge-test".to_owned(),
-            credentials: Credentials {
-                device_id: DeviceId::new("dev"),
-                secret: Secret::new("s"),
-            },
-            history: History::in_memory().unwrap(),
-            backoff: Backoff::default(),
-            wake,
-        }
-    }
 
     #[tokio::test(start_paused = true)]
     async fn wake_event_cuts_wait_short_and_resets_backoff() {
-        let (tx, rx) = watch::channel(0u64);
-        let mut d = daemon(rx);
+        let (tx, mut rx) = watch::channel(0u64);
+        let mut backoff = Backoff::default();
         for _ in 0..4 {
-            d.backoff.next_delay();
+            backoff.next_delay();
         }
 
         let start = tokio::time::Instant::now();
@@ -378,19 +392,18 @@ mod tests {
             tx.send_modify(|n| *n += 1);
             tx
         });
-        d.wait(Duration::from_secs(300)).await;
+        wait(&mut rx, &mut backoff, Duration::from_secs(300)).await;
         assert!(start.elapsed() < Duration::from_secs(10));
-        assert!(d.backoff.next_delay() <= Duration::from_secs(6));
+        assert!(backoff.next_delay() <= Duration::from_secs(6));
         drop(sender.await.unwrap());
     }
 
     #[tokio::test(start_paused = true)]
     async fn wait_without_watcher_sleeps_full_delay() {
-        let (tx, rx) = watch::channel(0u64);
+        let (tx, mut rx) = watch::channel(0u64);
         drop(tx);
-        let mut d = daemon(rx);
         let start = tokio::time::Instant::now();
-        d.wait(Duration::from_secs(30)).await;
+        wait(&mut rx, &mut Backoff::default(), Duration::from_secs(30)).await;
         assert!(start.elapsed() >= Duration::from_secs(30));
     }
 }

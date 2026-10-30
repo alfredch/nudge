@@ -15,7 +15,6 @@ directories.workspace = true
 fastrand.workspace = true
 futures-util.workspace = true
 gethostname.workspace = true
-notify-rust.workspace = true
 nudge-api.workspace = true
 oo7.workspace = true
 rpassword.workspace = true

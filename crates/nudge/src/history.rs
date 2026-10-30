@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use nudge_api::{DeviceId, Fetched, MessageId};
+use nudge_api::{DeviceId, Fetched, MessageId, Receipt};
 use rusqlite::{Connection, params};
 
 const SCHEMA_VERSION: i32 = 1;
@@ -29,6 +29,8 @@ impl History {
         let conn =
             Connection::open(path).with_context(|| format!("cannot open {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // The daemon and the action handler write concurrently.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Self::init(conn)
     }
 
@@ -123,6 +125,24 @@ impl History {
         tx.commit()?;
         Ok(inserted)
     }
+
+    /// Marks every message with this receipt (the original and its retries)
+    /// as acknowledged.
+    pub fn mark_acked(&mut self, receipt: &Receipt) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE messages SET acked = 1 WHERE receipt = ?1",
+            [receipt.as_str()],
+        )?)
+    }
+
+    /// Whether the user acknowledged this receipt on this computer.
+    pub fn is_acked(&self, receipt: &Receipt) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM messages WHERE receipt = ?1 AND acked = 1)",
+            [receipt.as_str()],
+            |row| row.get(0),
+        )?)
+    }
 }
 
 fn to_sql_id(id: u64) -> Result<i64> {
@@ -183,6 +203,17 @@ mod tests {
         h.store(&DeviceId::new("a"), &fetched()).unwrap();
         let other = h.store(&DeviceId::new("b"), &fetched()).unwrap();
         assert_eq!(other.messages.len(), 2);
+    }
+
+    #[test]
+    fn acknowledged_receipt() {
+        let mut h = History::in_memory().unwrap();
+        h.store(&DeviceId::new("dev"), &fetched()).unwrap();
+        let r = Receipt::new("r");
+        assert!(!h.is_acked(&r).unwrap());
+        assert_eq!(h.mark_acked(&r).unwrap(), 1);
+        assert!(h.is_acked(&r).unwrap());
+        assert!(!h.is_acked(&Receipt::new("other")).unwrap());
     }
 
     #[test]
