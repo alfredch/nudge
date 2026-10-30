@@ -15,3 +15,7 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - `nudge-api`: `PushStream` für die WebSocket-Verbindung mit typisierten Frames.
 - `nudge-api`: `Secret` mit maskierter Debug-Ausgabe und Nullung beim Drop.
 - Tests mit wiremock und einem lokalen WebSocket-Testserver.
+- `nudge login [--new-device]` und `nudge logout`: interaktiver Login mit 2FA, Geräteregistrierung,
+  Credentials im Secret Service (Fallback: Datei mit 0600).
+- `nudge daemon`: Echtzeit-Empfang, Verlauf in SQLite, Notifications mit Prioritäten-Mapping,
+  Sammel-Notification für Meldungen aus der Offline-Zeit, Löschen erst nach dem Speichern.

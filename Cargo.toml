@@ -14,12 +14,18 @@ authors = ["Alfred Keller"]
 nudge-api = { path = "crates/nudge-api", version = "0.1.0" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+directories = "6.0.0"
+gethostname = "1.1.0"
+notify-rust = { version = "4.18.2", default-features = false, features = ["z-with-tokio"] }
+oo7 = { version = "0.6.0", default-features = false, features = ["tokio", "native_crypto"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+rpassword = "7.5.4"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form", "query"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

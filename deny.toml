@@ -4,6 +4,13 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # zvariant/zbus_names were merged into zbus 6. oo7 0.6 and notify-rust 4.18
+    # still depend on zbus 5. Not a vulnerability; drop once both moved on.
+    { id = "RUSTSEC-2026-0370", reason = "unmaintained zbus 5 sub-crate (oo7, notify-rust)" },
+    { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus 5 sub-crate (oo7, notify-rust)" },
+    { id = "RUSTSEC-2026-0372", reason = "unmaintained zbus 5 sub-crate (oo7, notify-rust)" },
+]
 
 [licenses]
 version = 2
@@ -18,6 +25,8 @@ allow = [
     "Zlib",
     "CDLA-Permissive-2.0",
     "OpenSSL",
+    # File-level copyleft, compatible with distributing under MIT/Apache (option-ext via directories).
+    "MPL-2.0",
 ]
 confidence-threshold = 0.9
 

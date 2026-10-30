@@ -1,6 +1,6 @@
 use std::fmt;
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use zeroize::Zeroize;
 
 use crate::error::{Error, Result};
@@ -135,7 +135,7 @@ fn is_name_byte(b: u8) -> bool {
 }
 
 /// Message id, relative to this device. Used to delete processed messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct MessageId(pub u64);
 
@@ -146,7 +146,7 @@ impl fmt::Display for MessageId {
 }
 
 /// Receipt code of an emergency-priority message.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Receipt(String);
 
@@ -164,7 +164,7 @@ impl Receipt {
 ///
 /// Only `id` is required, so that a single incomplete message cannot block
 /// the device queue.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
     /// Id shared across all devices of the user.
