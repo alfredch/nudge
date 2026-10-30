@@ -72,7 +72,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 fn init_logging() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     // Under systemd, journald adds its own timestamps.
-    let under_systemd = std::env::var_os("JOURNAL_STREAM").is_some();
+    let under_systemd = stderr_is_journal();
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
@@ -82,4 +82,22 @@ fn init_logging() {
     } else {
         builder.init();
     }
+}
+
+/// Whether stderr is connected to journald. `JOURNAL_STREAM` alone is not
+/// enough: terminals started by a systemd user unit inherit it, so compare
+/// its `device:inode` with the actual stderr (see systemd.exec(5)).
+fn stderr_is_journal() -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Some(value) = std::env::var_os("JOURNAL_STREAM") else {
+        return false;
+    };
+    let Some((dev, ino)) = value.to_str().and_then(|v| v.split_once(':')) else {
+        return false;
+    };
+    let Ok(meta) = std::fs::metadata("/proc/self/fd/2") else {
+        return false;
+    };
+    dev.parse() == Ok(meta.dev()) && ino.parse() == Ok(meta.ino())
 }

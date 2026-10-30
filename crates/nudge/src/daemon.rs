@@ -8,7 +8,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::credentials::{self, Credentials};
+use crate::credentials::{self, Backend, Credentials};
 use crate::history::History;
 use crate::notify;
 use crate::paths::Paths;
@@ -56,13 +56,23 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
             "Not logged in. Run `nudge login` first.".to_owned(),
         ));
     };
-    debug!(?backend, device = %credentials.device_id, "credentials loaded");
+    let history_path = paths.history_db();
+    info!(
+        "nudge {} starting: device {}, credentials in {}, history in {}",
+        env!("CARGO_PKG_VERSION"),
+        credentials.device_id,
+        match backend {
+            Backend::Keyring => "Secret Service".to_owned(),
+            Backend::File => paths.credentials_file().display().to_string(),
+        },
+        history_path.display()
+    );
 
     let mut daemon = Daemon {
         client: Client::new(&user_agent)?,
         user_agent,
         credentials,
-        history: History::open(&paths.history_db())?,
+        history: History::open(&history_path)?,
     };
 
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -116,7 +126,7 @@ impl Daemon {
         )
         .await
         .context("cannot connect to the push server")?;
-        info!("connected to push server");
+        info!("connected to push server, waiting for messages");
 
         // Connect first, then fetch: anything arriving after this point
         // triggers a `!`, so nothing slips through between the two steps.
@@ -161,7 +171,10 @@ impl Daemon {
             .fetch_messages(&self.credentials.secret, device)
             .await?;
         if fetched.is_empty() {
-            debug!("no pending messages");
+            match mode {
+                Mode::Backlog => info!("no pending messages"),
+                Mode::Live => debug!("no pending messages"),
+            }
             return Ok(());
         }
         for m in &fetched.malformed {
@@ -171,12 +184,18 @@ impl Daemon {
         let inserted = tokio::task::block_in_place(|| self.history.store(device, &fetched))
             .context("cannot store messages in history")?;
 
-        info!(
-            fetched = fetched.messages.len() + fetched.malformed.len(),
-            new = inserted.messages.len() + inserted.malformed,
-            ?mode,
-            "messages processed"
-        );
+        let total = fetched.messages.len() + fetched.malformed.len();
+        let new_count = inserted.messages.len() + inserted.malformed;
+        match mode {
+            Mode::Backlog => info!("fetched {total} pending message(s), {new_count} new"),
+            Mode::Live => debug!("fetched {total} message(s), {new_count} new"),
+        }
+        if new_count < total {
+            info!(
+                "{} message(s) already in history, not shown again",
+                total - new_count
+            );
+        }
 
         let new: Vec<&Message> = fetched
             .messages
@@ -201,21 +220,24 @@ impl Daemon {
             self.client
                 .delete_up_to(&self.credentials.secret, device, highest)
                 .await?;
+            debug!("deleted messages up to id {highest} on the server");
         }
         Ok(())
     }
 }
 
 async fn announce(messages: &[&Message], mode: Mode) {
-    let visible: Vec<&Message> = messages
+    let (hidden, visible): (Vec<&Message>, Vec<&Message>) = messages
         .iter()
         .copied()
-        .filter(|m| notify::display_for(m).is_some())
-        .collect();
+        .partition(|m| notify::display_for(m).is_none());
+    for m in hidden {
+        log_message(m, "history only");
+    }
 
     if mode == Mode::Live || visible.len() <= 1 {
         for m in visible {
-            report(notify::show_message(m).await);
+            show(m).await;
         }
         return;
     }
@@ -224,13 +246,43 @@ async fn announce(messages: &[&Message], mode: Mode) {
         .into_iter()
         .partition(|m| m.requires_persistent_display());
     for m in persistent {
-        report(notify::show_message(m).await);
+        show(m).await;
     }
     match rest.as_slice() {
         [] => {}
-        [single] => report(notify::show_message(single).await),
-        _ => report(notify::show_summary(&rest).await),
+        [single] => show(single).await,
+        _ => {
+            for m in &rest {
+                log_message(m, "summarized");
+            }
+            report(notify::show_summary(&rest).await);
+        }
     }
+}
+
+async fn show(message: &Message) {
+    let persistent = notify::display_for(message).is_some_and(|d| d.persistent);
+    log_message(
+        message,
+        if persistent {
+            "shown, persistent"
+        } else {
+            "shown"
+        },
+    );
+    report(notify::show_message(message).await);
+}
+
+/// Logs metadata only; the message text stays out of the journal.
+fn log_message(message: &Message, action: &str) {
+    info!(
+        "message {} [{}] priority {}, {}: {:?}",
+        message.id,
+        action,
+        message.priority,
+        message.app,
+        message.display_title()
+    );
 }
 
 /// Notification failures are logged; messages are already stored.
