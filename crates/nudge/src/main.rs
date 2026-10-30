@@ -1,9 +1,12 @@
+mod backoff;
 mod credentials;
 mod daemon;
 mod history;
+mod instance;
 mod login;
 mod notify;
 mod paths;
+mod wake;
 
 use std::process::ExitCode;
 

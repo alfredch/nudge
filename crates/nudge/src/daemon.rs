@@ -1,6 +1,6 @@
 //! The long-running receive loop.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use nudge_api::{Client, DEFAULT_PUSH_URL, Frame, Message, PushStream};
@@ -8,17 +8,19 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, trace, warn};
 
+use crate::backoff::Backoff;
 use crate::credentials::{self, Backend, Credentials};
 use crate::history::History;
-use crate::notify;
-use crate::paths::Paths;
+use crate::paths::{APP_ID, Paths};
+use crate::wake::{self, WakeReceiver};
+use crate::{instance, notify};
 
 /// No keep-alive within this time means the connection is dead.
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(90);
-/// Pause before reconnecting after a failure. Backoff follows in M3.
-const RECONNECT_DELAY: Duration = Duration::from_secs(10);
 /// Pause before reconnecting when the server asked for it.
 const RELOAD_DELAY: Duration = Duration::from_secs(1);
+/// A connection that lasted this long resets the backoff.
+const STABLE_SESSION: Duration = Duration::from_secs(60);
 
 /// Why the daemon stopped.
 #[derive(Debug)]
@@ -40,6 +42,8 @@ enum Mode {
 
 enum SessionEnd {
     Reload,
+    /// Resume or network change: the connection is probably stale.
+    Woken,
     Fatal(String),
 }
 
@@ -48,9 +52,12 @@ struct Daemon {
     user_agent: String,
     credentials: Credentials,
     history: History,
+    backoff: Backoff,
+    wake: WakeReceiver,
 }
 
 pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
+    let _instance = instance::acquire(APP_ID).await?;
     let Some((credentials, backend)) = credentials::load(paths).await? else {
         return Ok(Exit::NeedsLogin(
             "Not logged in. Run `nudge login` first.".to_owned(),
@@ -73,6 +80,8 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
         user_agent,
         credentials,
         history: History::open(&history_path)?,
+        backoff: Backoff::default(),
+        wake: wake::spawn(),
     };
 
     notify::init().await;
@@ -95,11 +104,19 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
 impl Daemon {
     async fn run_loop(&mut self) -> Exit {
         loop {
-            match self.session().await {
+            // Events from before this attempt are covered by the fetch after connecting.
+            self.wake.borrow_and_update();
+            let started = Instant::now();
+            let end = self.session().await;
+            if started.elapsed() >= STABLE_SESSION {
+                self.backoff.reset();
+            }
+            match end {
                 Ok(SessionEnd::Reload) => {
                     info!("server requested reconnect");
                     sleep(RELOAD_DELAY).await;
                 }
+                Ok(SessionEnd::Woken) => self.backoff.reset(),
                 Ok(SessionEnd::Fatal(reason)) => return Exit::NeedsLogin(reason),
                 Err(e) if is_session_rejected(&e) => {
                     return Exit::NeedsLogin(format!(
@@ -107,13 +124,23 @@ impl Daemon {
                     ));
                 }
                 Err(e) => {
+                    let delay = self.backoff.next_delay();
                     warn!(
                         "connection lost: {e:#}; reconnecting in {}s",
-                        RECONNECT_DELAY.as_secs()
+                        delay.as_secs()
                     );
-                    sleep(RECONNECT_DELAY).await;
+                    self.wait(delay).await;
                 }
             }
+        }
+    }
+
+    /// Sleeps before the next attempt; a wake event cuts the wait short.
+    async fn wait(&mut self, delay: Duration) {
+        tokio::select! {
+            _ = sleep(delay) => {}
+            // `changed` fails if the watcher is gone; the branch is then disabled.
+            Ok(()) = self.wake.changed() => self.backoff.reset(),
         }
     }
 
@@ -134,9 +161,14 @@ impl Daemon {
         self.sync(Mode::Backlog).await?;
 
         loop {
-            let frame = timeout(KEEPALIVE_TIMEOUT, stream.next_frame())
-                .await
-                .map_err(|_| anyhow!("no keep-alive for {}s", KEEPALIVE_TIMEOUT.as_secs()))??;
+            let frame = tokio::select! {
+                frame = timeout(KEEPALIVE_TIMEOUT, stream.next_frame()) => frame
+                    .map_err(|_| anyhow!("no keep-alive for {}s", KEEPALIVE_TIMEOUT.as_secs()))??,
+                Ok(()) = self.wake.changed() => {
+                    let _ = stream.close().await;
+                    return Ok(SessionEnd::Woken);
+                }
+            };
             match frame {
                 None => return Err(anyhow!("server closed the connection")),
                 Some(Frame::Keepalive) => trace!("keep-alive"),
@@ -298,4 +330,55 @@ fn is_session_rejected(err: &anyhow::Error) -> bool {
     err.chain()
         .filter_map(|e| e.downcast_ref::<nudge_api::Error>())
         .any(nudge_api::Error::is_client_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nudge_api::{DeviceId, Secret};
+    use tokio::sync::watch;
+
+    fn daemon(wake: WakeReceiver) -> Daemon {
+        Daemon {
+            client: Client::new("nudge-test").unwrap(),
+            user_agent: "nudge-test".to_owned(),
+            credentials: Credentials {
+                device_id: DeviceId::new("dev"),
+                secret: Secret::new("s"),
+            },
+            history: History::in_memory().unwrap(),
+            backoff: Backoff::default(),
+            wake,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wake_event_cuts_wait_short_and_resets_backoff() {
+        let (tx, rx) = watch::channel(0u64);
+        let mut d = daemon(rx);
+        for _ in 0..4 {
+            d.backoff.next_delay();
+        }
+
+        let start = tokio::time::Instant::now();
+        let sender = tokio::spawn(async move {
+            sleep(Duration::from_secs(3)).await;
+            tx.send_modify(|n| *n += 1);
+            tx
+        });
+        d.wait(Duration::from_secs(300)).await;
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(d.backoff.next_delay() <= Duration::from_secs(6));
+        drop(sender.await.unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_without_watcher_sleeps_full_delay() {
+        let (tx, rx) = watch::channel(0u64);
+        drop(tx);
+        let mut d = daemon(rx);
+        let start = tokio::time::Instant::now();
+        d.wait(Duration::from_secs(30)).await;
+        assert!(start.elapsed() >= Duration::from_secs(30));
+    }
 }

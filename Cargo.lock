@@ -1342,6 +1342,8 @@ dependencies = [
  "anyhow",
  "clap",
  "directories",
+ "fastrand",
+ "futures-util",
  "gethostname",
  "notify-rust",
  "nudge-api",

@@ -18,6 +18,7 @@ directories = "6.0.0"
 gethostname = "1.1.0"
 notify-rust = { version = "4.18.2", default-features = false, features = ["z-with-tokio"] }
 oo7 = { version = "0.6.0", default-features = false, features = ["tokio", "native_crypto"] }
+fastrand = "2.5.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 rpassword = "7.5.4"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
