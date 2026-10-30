@@ -181,6 +181,9 @@ impl Notifier {
     ) {
         loop {
             tokio::select! {
+                // A click on a transient notification is followed by its
+                // close signal; handle the click before forgetting the target.
+                biased;
                 Some(msg) = invoked.next() => {
                     let Ok((id, key)) = msg.body().deserialize::<(u32, String)>() else {
                         continue;
@@ -697,6 +700,23 @@ mod tests {
             assert_eq!(Action::from_key(a.key()), Some(a));
         }
         assert_eq!(Action::from_key("default"), None);
+    }
+
+    /// Shows a real notification; needs a desktop session.
+    /// `cargo test -p nudge notify::tests::smoke -- --ignored`
+    #[tokio::test]
+    #[ignore]
+    async fn smoke() {
+        let (n, _clicks) = Notifier::connect(false).await.unwrap();
+        n.show_info("nudge smoke test", "Notify call works <&>", false)
+            .await
+            .unwrap();
+        let m = msg(serde_json::json!({
+            "id": 1, "priority": 2, "receipt": "smoke", "title": "nudge smoke test",
+            "message": "<b>emergency</b> & resident", "html": 1, "url": "https://example.org"
+        }));
+        n.show_message(&m, false, None).await.unwrap();
+        n.close_receipt(&Receipt::new("smoke")).await.unwrap();
     }
 
     #[test]

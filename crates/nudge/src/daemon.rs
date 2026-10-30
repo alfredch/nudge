@@ -3,7 +3,9 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use nudge_api::{Client, DEFAULT_PUSH_URL, Frame, Message, PushStream};
+use std::collections::HashMap;
+
+use nudge_api::{Client, DEFAULT_PUSH_URL, Frame, Message, MessageId, PushStream, Receipt};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use tokio::time::{sleep, timeout};
@@ -274,6 +276,16 @@ impl Daemon {
             .iter()
             .filter(|m| inserted.messages.contains(&m.id))
             .collect();
+        // While offline, an emergency may have been repeated many times:
+        // show only its latest copy.
+        let latest = latest_per_receipt(&new);
+        new.retain(|m| match &m.receipt {
+            Some(r) if latest.get(r) != Some(&m.id) => {
+                log_message(m, "superseded by a later retry");
+                false
+            }
+            _ => true,
+        });
         // Retries of an emergency the user already acknowledged here.
         tokio::task::block_in_place(|| {
             new.retain(|m| match &m.receipt {
@@ -387,10 +399,15 @@ impl Daemon {
         );
 
         let sound = self.config.borrow().sound.clone();
-        if let Some(name) = sound::sound_for(message, &sound, quiet)
-            && let Some(path) = self.cache.get(cache::Kind::Sound, name).await
-        {
-            self.sound.play(path, sound.volume);
+        if let Some(name) = sound::sound_for(message, &sound, quiet) {
+            let mut path = self.cache.get(cache::Kind::Sound, name).await;
+            // An unavailable custom sound must not silence the message.
+            if path.is_none() && name != sound.default {
+                path = self.cache.get(cache::Kind::Sound, &sound.default).await;
+            }
+            if let Some(path) = path {
+                self.sound.play(path, sound.volume);
+            }
         }
     }
 }
@@ -405,6 +422,18 @@ fn log_message(message: &Message, action: &str) {
         message.app,
         message.display_title()
     );
+}
+
+/// Highest message id for each receipt.
+fn latest_per_receipt(messages: &[&Message]) -> HashMap<Receipt, MessageId> {
+    let mut latest: HashMap<Receipt, MessageId> = HashMap::new();
+    for m in messages {
+        if let Some(r) = &m.receipt {
+            let id = latest.entry(r.clone()).or_insert(m.id);
+            *id = (*id).max(m.id);
+        }
+    }
+    latest
 }
 
 /// Re-reads the configuration; an invalid file keeps the current one.
@@ -450,6 +479,25 @@ fn is_session_rejected(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_latest_retry_per_receipt() {
+        let m = |id: u64, receipt: Option<&str>| -> Message {
+            serde_json::from_value(serde_json::json!({"id": id, "priority": 2, "receipt": receipt}))
+                .unwrap()
+        };
+        let all = [
+            m(1, Some("a")),
+            m(3, Some("a")),
+            m(2, Some("b")),
+            m(4, None),
+        ];
+        let refs: Vec<&Message> = all.iter().collect();
+        let latest = latest_per_receipt(&refs);
+        assert_eq!(latest.len(), 2);
+        assert_eq!(latest[&Receipt::new("a")], MessageId(3));
+        assert_eq!(latest[&Receipt::new("b")], MessageId(2));
+    }
 
     #[tokio::test(start_paused = true)]
     async fn wake_event_cuts_wait_short_and_resets_backoff() {
