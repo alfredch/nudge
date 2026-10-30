@@ -32,3 +32,9 @@ Ergänzt `PLAN.md`. Bei Widerspruch gilt dieses Dokument.
 
 - Flatpak: später.
 - Ob Live-Meldungen eine eigene Ruhezeiten-Ausnahme pro App bekommen sollen: in M4 entscheiden.
+
+## Verifiziert am echten Server (2026-10-30, `cargo test -p nudge-api --test live -- --ignored`)
+
+- TLS und WebSocket zu `wss://client.pushover.net/push` funktionieren mit rustls/aws-lc-rs.
+- Ungültiges Gerät oder Secret am WebSocket: Frame `E`, danach schließt der Server.
+- Ungültiges Secret bei `GET /1/messages.json`: HTTP 403, `errors: ["secret is invalid"]`. Ein 4xx bei bestehender Session heißt also: Re-Login nötig.
