@@ -161,17 +161,25 @@ impl Receipt {
 }
 
 /// A message as returned by `GET /1/messages.json`.
+///
+/// Only `id` is required, so that a single incomplete message cannot block
+/// the device queue.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Message {
     pub id: MessageId,
     /// Id shared across all devices of the user.
+    #[serde(default)]
     pub umid: u64,
     pub title: Option<String>,
+    #[serde(default)]
     pub message: String,
+    #[serde(default)]
     pub app: String,
+    #[serde(default)]
     pub aid: u64,
     pub icon: Option<String>,
     /// Unix timestamp; the sender may override it.
+    #[serde(default)]
     pub date: i64,
     pub queued_date: Option<i64>,
     pub dispatched_date: Option<i64>,
@@ -200,10 +208,70 @@ impl Message {
         self.priority >= 2
     }
 
-    /// Emergency message the user still has to acknowledge.
-    pub fn needs_ack(&self) -> bool {
-        self.is_emergency() && !self.acked && self.receipt.is_some()
+    /// Unacknowledged emergency message. The API requires these to stay
+    /// visible until the user acts, with or without a receipt.
+    pub fn requires_persistent_display(&self) -> bool {
+        self.is_emergency() && !self.acked
     }
+
+    /// Whether the message can be acknowledged via the API.
+    pub fn can_acknowledge(&self) -> bool {
+        self.receipt.is_some()
+    }
+}
+
+/// Result of a fetch.
+///
+/// Entries that cannot be decoded are kept raw in `malformed`, so the
+/// caller can still store them and delete past them.
+#[derive(Debug, Clone, Default)]
+pub struct Fetched {
+    pub messages: Vec<Message>,
+    pub malformed: Vec<Malformed>,
+}
+
+impl Fetched {
+    /// Highest id over all entries, decodable or not. This is the value to
+    /// pass to `delete_up_to` once everything is stored.
+    pub fn highest_id(&self) -> Option<MessageId> {
+        let decoded = self.messages.iter().map(|m| m.id);
+        let raw = self.malformed.iter().filter_map(|m| m.id);
+        decoded.chain(raw).max()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty() && self.malformed.is_empty()
+    }
+
+    pub(crate) fn from_raw(entries: Vec<serde_json::Value>) -> Self {
+        let mut fetched = Fetched::default();
+        for raw in entries {
+            match Message::deserialize(&raw) {
+                Ok(message) => fetched.messages.push(message),
+                Err(e) => fetched.malformed.push(Malformed {
+                    id: raw_id(&raw).map(MessageId),
+                    error: e.to_string(),
+                    raw,
+                }),
+            }
+        }
+        fetched
+    }
+}
+
+/// A message entry that could not be decoded.
+#[derive(Debug, Clone)]
+pub struct Malformed {
+    /// The id, if it could be read from `id` or `id_str`.
+    pub id: Option<MessageId>,
+    pub raw: serde_json::Value,
+    pub error: String,
+}
+
+fn raw_id(raw: &serde_json::Value) -> Option<u64> {
+    raw.get("id")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| raw.get("id_str")?.as_str()?.parse().ok())
 }
 
 /// The API encodes flags as `0`/`1`; accept bools and strings as well.
@@ -265,6 +333,43 @@ mod tests {
         assert!(ResourceName::new("../etc/passwd").is_err());
         assert!(ResourceName::new("a/b").is_err());
         assert!(ResourceName::new("").is_err());
+    }
+
+    #[test]
+    fn persistent_display_does_not_need_receipt() {
+        let raw = serde_json::json!({"id": 1, "priority": 2, "acked": 0});
+        let m: Message = serde_json::from_value(raw).unwrap();
+        assert!(m.requires_persistent_display());
+        assert!(!m.can_acknowledge());
+
+        let acked = serde_json::json!({"id": 2, "priority": 2, "acked": 1, "receipt": "r"});
+        let m: Message = serde_json::from_value(acked).unwrap();
+        assert!(!m.requires_persistent_display());
+        assert!(m.can_acknowledge());
+    }
+
+    #[test]
+    fn malformed_entries_are_kept() {
+        let fetched = Fetched::from_raw(vec![
+            serde_json::json!({"id": 3, "message": "ok", "app": "A"}),
+            serde_json::json!({"id": 9, "priority": "high"}),
+            serde_json::json!({"id_str": "12", "id": "twelve"}),
+            serde_json::json!({"garbage": true}),
+        ]);
+        assert_eq!(fetched.messages.len(), 1);
+        assert_eq!(fetched.malformed.len(), 3);
+        let ids: Vec<_> = fetched.malformed.iter().map(|m| m.id).collect();
+        assert_eq!(ids, [Some(MessageId(9)), Some(MessageId(12)), None]);
+        assert_eq!(fetched.highest_id(), Some(MessageId(12)));
+        assert!(Fetched::default().highest_id().is_none());
+    }
+
+    #[test]
+    fn minimal_message_decodes() {
+        let m: Message = serde_json::from_value(serde_json::json!({"id": 1})).unwrap();
+        assert_eq!(m.id, MessageId(1));
+        assert_eq!(m.priority, 0);
+        assert_eq!(m.display_title(), "");
     }
 
     #[test]

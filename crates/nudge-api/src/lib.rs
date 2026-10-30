@@ -14,4 +14,6 @@ mod types;
 pub use client::{Client, DEFAULT_API_BASE, Login, user_agent};
 pub use error::{Error, Result};
 pub use stream::{DEFAULT_PUSH_URL, Frame, PushStream};
-pub use types::{DeviceId, DeviceName, Message, MessageId, Receipt, ResourceName, Secret};
+pub use types::{
+    DeviceId, DeviceName, Fetched, Malformed, Message, MessageId, Receipt, ResourceName, Secret,
+};

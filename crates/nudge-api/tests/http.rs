@@ -153,10 +153,12 @@ async fn fetch_messages_from_fixture() {
         .mount(&server)
         .await;
 
-    let msgs = client
+    let fetched = client
         .fetch_messages(&secret(), &DeviceId::new("dev42"))
         .await
         .unwrap();
+    assert!(fetched.malformed.is_empty());
+    let msgs = &fetched.messages;
     assert_eq!(msgs.len(), 4);
 
     let plain = &msgs[0];
@@ -178,10 +180,11 @@ async fn fetch_messages_from_fixture() {
 
     let emergency = &msgs[3];
     assert!(emergency.is_emergency());
-    assert!(emergency.needs_ack());
+    assert!(emergency.requires_persistent_display());
+    assert!(emergency.can_acknowledge());
     assert_eq!(emergency.receipt, Some(Receipt::new("rcpt123abc")));
 
-    assert_eq!(msgs.iter().map(|m| m.id).max(), Some(MessageId(7)));
+    assert_eq!(fetched.highest_id(), Some(MessageId(7)));
 }
 
 #[tokio::test]
@@ -195,11 +198,37 @@ async fn fetch_messages_empty() {
         .mount(&server)
         .await;
 
-    let msgs = client
+    let fetched = client
         .fetch_messages(&secret(), &DeviceId::new("dev42"))
         .await
         .unwrap();
-    assert!(msgs.is_empty());
+    assert!(fetched.is_empty());
+    assert_eq!(fetched.highest_id(), None);
+}
+
+#[tokio::test]
+async fn fetch_keeps_malformed_entries() {
+    let (server, client) = setup().await;
+    mock("GET", "/1/messages.json")
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": 1,
+            "messages": [
+                {"id": 1, "message": "fine", "app": "A", "aid": 1, "umid": 1, "date": 1},
+                {"id": 2, "date": "not a number"}
+            ],
+            "request": "r10"
+        })))
+        .mount(&server)
+        .await;
+
+    let fetched = client
+        .fetch_messages(&secret(), &DeviceId::new("dev42"))
+        .await
+        .unwrap();
+    assert_eq!(fetched.messages.len(), 1);
+    assert_eq!(fetched.malformed.len(), 1);
+    assert_eq!(fetched.malformed[0].id, Some(MessageId(2)));
+    assert_eq!(fetched.highest_id(), Some(MessageId(2)));
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::error::{Error, Result};
-use crate::types::{DeviceId, DeviceName, Message, MessageId, Receipt, ResourceName, Secret};
+use crate::types::{DeviceId, DeviceName, Fetched, MessageId, Receipt, ResourceName, Secret};
 
 pub const DEFAULT_API_BASE: &str = "https://api.pushover.net/";
 
@@ -89,11 +89,13 @@ impl Client {
     }
 
     /// Downloads all messages that have not been deleted yet.
-    pub async fn fetch_messages(&self, secret: &Secret, device: &DeviceId) -> Result<Vec<Message>> {
+    ///
+    /// Each entry is decoded on its own; see [`Fetched`].
+    pub async fn fetch_messages(&self, secret: &Secret, device: &DeviceId) -> Result<Fetched> {
         #[derive(Deserialize)]
         struct Resp {
             #[serde(default)]
-            messages: Vec<Message>,
+            messages: Vec<serde_json::Value>,
         }
         let resp = self
             .http
@@ -101,7 +103,7 @@ impl Client {
             .query(&[("secret", secret.expose()), ("device_id", device.as_str())])
             .send()
             .await?;
-        Ok(parse::<Resp>(resp).await?.messages)
+        Ok(Fetched::from_raw(parse::<Resp>(resp).await?.messages))
     }
 
     /// Permanently deletes all messages of the device up to and including `highest`.
