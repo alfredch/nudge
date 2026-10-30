@@ -153,7 +153,7 @@ impl Daemon {
         }
     }
 
-    /// Fetch → persist → delete on server → notify.
+    /// Fetch → persist → notify → delete on server.
     async fn sync(&mut self, mode: Mode) -> Result<()> {
         let device = &self.credentials.device_id;
         let fetched = self
@@ -171,11 +171,6 @@ impl Daemon {
         let inserted = tokio::task::block_in_place(|| self.history.store(device, &fetched))
             .context("cannot store messages in history")?;
 
-        if let Some(highest) = fetched.highest_id() {
-            self.client
-                .delete_up_to(&self.credentials.secret, device, highest)
-                .await?;
-        }
         info!(
             fetched = fetched.messages.len() + fetched.malformed.len(),
             new = inserted.messages.len() + inserted.malformed,
@@ -198,6 +193,14 @@ impl Daemon {
                 )
                 .await,
             );
+        }
+
+        // Delete last: if it fails, the next fetch returns the same entries,
+        // the history skips them and nothing is announced twice or lost.
+        if let Some(highest) = fetched.highest_id() {
+            self.client
+                .delete_up_to(&self.credentials.secret, device, highest)
+                .await?;
         }
         Ok(())
     }

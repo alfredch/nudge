@@ -55,22 +55,55 @@ impl Credentials {
     }
 }
 
-async fn keyring() -> Result<oo7::Keyring> {
-    let keyring = oo7::Keyring::new().await?;
-    keyring.unlock().await?;
-    Ok(keyring)
+const SECRET_SERVICE: &str = "org.freedesktop.secrets";
+
+/// Whether a Secret Service is running or D-Bus-activatable. Only its
+/// absence allows the plaintext fallback; a locked keyring or a dismissed
+/// unlock prompt is an error, not a reason to write the secret to disk.
+async fn secret_service_available() -> bool {
+    let probe = async {
+        let conn = zbus::Connection::session().await?;
+        let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
+        let running = dbus.list_names().await?;
+        let activatable = dbus.list_activatable_names().await?;
+        Ok::<_, zbus::Error>(
+            running
+                .iter()
+                .chain(activatable.iter())
+                .any(|name| name.as_str() == SECRET_SERVICE),
+        )
+    };
+    match probe.await {
+        Ok(found) => found,
+        Err(e) => {
+            debug!("cannot query the session bus: {e}");
+            false
+        }
+    }
+}
+
+/// The unlocked default collection, or `None` without a Secret Service.
+async fn keyring() -> Result<Option<oo7::Keyring>> {
+    if !secret_service_available().await {
+        return Ok(None);
+    }
+    let keyring = oo7::Keyring::new()
+        .await
+        .context("cannot open the Secret Service")?;
+    keyring
+        .unlock()
+        .await
+        .context("cannot unlock the Secret Service keyring")?;
+    Ok(Some(keyring))
 }
 
 pub async fn load(paths: &Paths) -> Result<Option<(Credentials, Backend)>> {
-    match keyring().await {
-        Ok(keyring) => {
-            let items = keyring.search_items(&ATTRIBUTES).await?;
-            if let Some(item) = items.first() {
-                let secret = item.secret().await?;
-                return Ok(Some((Credentials::from_json(&secret)?, Backend::Keyring)));
-            }
+    if let Some(keyring) = keyring().await? {
+        let items = keyring.search_items(&ATTRIBUTES).await?;
+        if let Some(item) = items.first() {
+            let secret = item.secret().await?;
+            return Ok(Some((Credentials::from_json(&secret)?, Backend::Keyring)));
         }
-        Err(e) => debug!("Secret Service unavailable: {e:#}"),
     }
 
     let file = paths.credentials_file();
@@ -84,8 +117,8 @@ pub async fn load(paths: &Paths) -> Result<Option<(Credentials, Backend)>> {
 pub async fn save(paths: &Paths, credentials: &Credentials) -> Result<Backend> {
     let json = credentials.to_json()?;
     let file = paths.credentials_file();
-    match keyring().await {
-        Ok(keyring) => {
+    match keyring().await? {
+        Some(keyring) => {
             keyring
                 .create_item(LABEL, &ATTRIBUTES, json.as_str(), true)
                 .await
@@ -93,9 +126,9 @@ pub async fn save(paths: &Paths, credentials: &Credentials) -> Result<Backend> {
             remove_file(&file)?;
             Ok(Backend::Keyring)
         }
-        Err(e) => {
+        None => {
             warn!(
-                "Secret Service unavailable ({e:#}), storing credentials in {}",
+                "no Secret Service available, storing credentials in {}",
                 file.display()
             );
             write_private(&file, json.as_bytes())?;
@@ -107,12 +140,9 @@ pub async fn save(paths: &Paths, credentials: &Credentials) -> Result<Backend> {
 /// Removes stored credentials from all backends. Returns whether any existed.
 pub async fn delete(paths: &Paths) -> Result<bool> {
     let mut found = false;
-    match keyring().await {
-        Ok(keyring) => {
-            found = !keyring.search_items(&ATTRIBUTES).await?.is_empty();
-            keyring.delete(&ATTRIBUTES).await?;
-        }
-        Err(e) => debug!("Secret Service unavailable: {e:#}"),
+    if let Some(keyring) = keyring().await? {
+        found = !keyring.search_items(&ATTRIBUTES).await?.is_empty();
+        keyring.delete(&ATTRIBUTES).await?;
     }
     found |= remove_file(&paths.credentials_file())?;
     Ok(found)
