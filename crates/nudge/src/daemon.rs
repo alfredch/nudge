@@ -19,6 +19,8 @@ use crate::{instance, notify};
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(90);
 /// Pause before reconnecting when the server asked for it.
 const RELOAD_DELAY: Duration = Duration::from_secs(1);
+/// Closing a probably dead connection must not block reconnecting.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 /// A connection that lasted this long resets the backoff.
 const STABLE_SESSION: Duration = Duration::from_secs(60);
 
@@ -29,6 +31,8 @@ pub enum Exit {
     Shutdown,
     /// The session is no longer usable; the user has to act.
     NeedsLogin(String),
+    /// Another daemon owns the bus name.
+    AlreadyRunning,
 }
 
 /// How fetched messages are announced.
@@ -57,7 +61,9 @@ struct Daemon {
 }
 
 pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
-    let _instance = instance::acquire(APP_ID).await?;
+    let Some(_instance) = instance::acquire(APP_ID).await? else {
+        return Ok(Exit::AlreadyRunning);
+    };
     let Some((credentials, backend)) = credentials::load(paths).await? else {
         return Ok(Exit::NeedsLogin(
             "Not logged in. Run `nudge login` first.".to_owned(),
@@ -165,7 +171,7 @@ impl Daemon {
                 frame = timeout(KEEPALIVE_TIMEOUT, stream.next_frame()) => frame
                     .map_err(|_| anyhow!("no keep-alive for {}s", KEEPALIVE_TIMEOUT.as_secs()))??,
                 Ok(()) = self.wake.changed() => {
-                    let _ = stream.close().await;
+                    close(stream).await;
                     return Ok(SessionEnd::Woken);
                 }
             };
@@ -174,7 +180,7 @@ impl Daemon {
                 Some(Frame::Keepalive) => trace!("keep-alive"),
                 Some(Frame::NewMessages) => self.sync(Mode::Live).await?,
                 Some(Frame::Reload) => {
-                    let _ = stream.close().await;
+                    close(stream).await;
                     return Ok(SessionEnd::Reload);
                 }
                 Some(Frame::Error) => {
@@ -316,6 +322,12 @@ fn log_message(message: &Message, action: &str) {
         message.app,
         message.display_title()
     );
+}
+
+async fn close(stream: PushStream) {
+    if timeout(CLOSE_TIMEOUT, stream.close()).await.is_err() {
+        debug!("closing the old connection timed out");
+    }
 }
 
 /// Notification failures are logged; messages are already stored.

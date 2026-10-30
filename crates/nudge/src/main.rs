@@ -20,6 +20,9 @@ const ABOUT: &str = "Unofficial Pushover Open Client for the Linux desktop.\n\
 
 /// Exit code when the user has to log in again (EX_CONFIG from sysexits.h).
 const EXIT_NEEDS_LOGIN: u8 = 78;
+/// Exit code when another daemon is running (EX_UNAVAILABLE). Like 78, a
+/// restart would not help; the systemd unit excludes both from restarting.
+const EXIT_ALREADY_RUNNING: u8 = 69;
 
 #[derive(Parser)]
 #[command(version, about = ABOUT, long_about = None)]
@@ -66,6 +69,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             daemon::Exit::NeedsLogin(reason) => {
                 eprintln!("{reason}");
                 return Ok(ExitCode::from(EXIT_NEEDS_LOGIN));
+            }
+            daemon::Exit::AlreadyRunning => {
+                eprintln!("Another nudge daemon is already running.");
+                return Ok(ExitCode::from(EXIT_ALREADY_RUNNING));
             }
         },
     }

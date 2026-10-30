@@ -38,6 +38,10 @@ pub enum Error {
 
     #[error("WebSocket error: {0}")]
     WebSocket(#[source] Box<tokio_tungstenite::tungstenite::Error>),
+
+    /// Connecting to the push server took too long.
+    #[error("connection to the push server timed out after {0:?}")]
+    ConnectTimeout(std::time::Duration),
 }
 
 impl Error {

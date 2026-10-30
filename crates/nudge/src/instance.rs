@@ -1,6 +1,6 @@
 //! Single-instance guard via a well-known name on the session bus.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
 
 /// Holds the bus name for as long as it lives.
@@ -8,8 +8,8 @@ pub struct Instance {
     _conn: zbus::Connection,
 }
 
-/// Claims `name`. Fails if another process already owns it.
-pub async fn acquire(name: &str) -> Result<Instance> {
+/// Claims `name`. `None` if another process already owns it.
+pub async fn acquire(name: &str) -> Result<Option<Instance>> {
     let conn = zbus::Connection::session()
         .await
         .context("cannot connect to the D-Bus session bus")?;
@@ -21,11 +21,9 @@ pub async fn acquire(name: &str) -> Result<Instance> {
         .with_context(|| format!("cannot request bus name {name}"))?;
     match reply {
         RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {
-            Ok(Instance { _conn: conn })
+            Ok(Some(Instance { _conn: conn }))
         }
-        RequestNameReply::Exists | RequestNameReply::InQueue => {
-            bail!("another nudge daemon is already running (bus name {name} is taken)")
-        }
+        RequestNameReply::Exists | RequestNameReply::InQueue => Ok(None),
     }
 }
 
@@ -42,20 +40,13 @@ mod tests {
         }
         let name = format!("io.github.alfredch.Nudge.Test.p{}", std::process::id());
         let first = acquire(&name).await.unwrap();
-        let second = acquire(&name).await;
-        assert!(second.is_err());
-        assert!(
-            second
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("already running")
-        );
+        assert!(first.is_some());
+        assert!(acquire(&name).await.unwrap().is_none());
         drop(first);
         // Released with the connection; give the bus a moment.
         let mut again = None;
         for _ in 0..20 {
-            if let Ok(i) = acquire(&name).await {
+            if let Some(i) = acquire(&name).await.unwrap() {
                 again = Some(i);
                 break;
             }

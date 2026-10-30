@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -12,6 +13,9 @@ use crate::error::{Error, Result};
 use crate::types::{DeviceId, Secret};
 
 pub const DEFAULT_PUSH_URL: &str = "wss://client.pushover.net/push";
+/// Default limit for establishing the push connection. Without it, a
+/// connect on a half-working network can hang for minutes.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A single-byte frame sent by the push server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +69,8 @@ pub struct PushStream {
 }
 
 impl PushStream {
-    /// Connects to `url` and sends the login frame.
+    /// Connects to `url` and sends the login frame, giving up after
+    /// [`CONNECT_TIMEOUT`].
     ///
     /// A failed login is not reported here: the server answers with an
     /// [`Frame::Error`] and closes the connection.
@@ -75,6 +80,24 @@ impl PushStream {
         device: &DeviceId,
         secret: &Secret,
     ) -> Result<Self> {
+        Self::connect_with_timeout(url, user_agent, device, secret, CONNECT_TIMEOUT).await
+    }
+
+    /// Like [`PushStream::connect`] with a custom limit for TCP, TLS,
+    /// WebSocket handshake and login frame together.
+    pub async fn connect_with_timeout(
+        url: &str,
+        user_agent: &str,
+        device: &DeviceId,
+        secret: &Secret,
+        limit: Duration,
+    ) -> Result<Self> {
+        tokio::time::timeout(limit, Self::open(url, user_agent, device, secret))
+            .await
+            .map_err(|_| Error::ConnectTimeout(limit))?
+    }
+
+    async fn open(url: &str, user_agent: &str, device: &DeviceId, secret: &Secret) -> Result<Self> {
         let mut request = url.into_client_request()?;
         let ua = HeaderValue::from_str(user_agent)
             .map_err(|e| tungstenite::Error::HttpFormat(e.into()))?;

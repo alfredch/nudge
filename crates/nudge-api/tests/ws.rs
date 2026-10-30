@@ -162,3 +162,31 @@ async fn connect_refused() {
         PushStream::connect(&url, UA, &DeviceId::new("dev42"), &Secret::new("s3cr3t")).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn connect_times_out_when_handshake_stalls() {
+    // Accepts TCP but never answers the WebSocket handshake.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/push", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        drop(tcp);
+    });
+
+    let start = std::time::Instant::now();
+    let result = PushStream::connect_with_timeout(
+        &url,
+        UA,
+        &DeviceId::new("dev42"),
+        &Secret::new("s3cr3t"),
+        Duration::from_millis(200),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(nudge_api::Error::ConnectTimeout(_))),
+        "{result:?}"
+    );
+    assert!(start.elapsed() < Duration::from_secs(2));
+    server.abort();
+}
