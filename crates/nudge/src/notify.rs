@@ -249,7 +249,7 @@ impl Notifier {
             }
         }
 
-        let link = message.url.as_deref().filter(|u| is_web_url(u));
+        let link = message.url.as_deref().and_then(web_url);
         let mut actions = Vec::new();
         if self.inner.actions {
             if display.persistent && message.can_acknowledge() {
@@ -292,7 +292,7 @@ impl Notifier {
                 Target {
                     message: message.id,
                     receipt: message.receipt.clone(),
-                    url: link.map(str::to_owned),
+                    url: link,
                     text,
                 },
             );
@@ -446,6 +446,31 @@ impl State {
 }
 
 /// Only web links are opened; other schemes could start arbitrary handlers.
+/// The link to open for a message URL. Senders often omit the scheme
+/// ("example.org/x"); such host names get `https://`. Any other scheme
+/// (`file:`, `javascript:`, ...) yields `None`.
+pub fn web_url(url: &str) -> Option<String> {
+    let url = url.trim();
+    if is_web_url(url) {
+        return Some(url.to_owned());
+    }
+    if url.is_empty() || url.contains("://") || url.contains(char::is_whitespace) {
+        return None;
+    }
+    let host_port = url.split(['/', '?', '#']).next().unwrap_or_default();
+    let (host, port) = match host_port.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (host_port, None),
+    };
+    // "host:8080" is a port; "mailto:x" or "javascript:x" is a scheme.
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    let host_ok = host.contains('.')
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '-');
+    (port_ok && host_ok).then(|| format!("https://{url}"))
+}
+
 pub fn is_web_url(url: &str) -> bool {
     let lower = url.trim_start().to_ascii_lowercase();
     lower.starts_with("https://") || lower.starts_with("http://")
@@ -725,6 +750,27 @@ mod tests {
         assert!(is_web_url("HTTP://x.org"));
         assert!(!is_web_url("file:///etc/passwd"));
         assert!(!is_web_url("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn web_url_adds_https() {
+        let w = |u: &str| web_url(u);
+        assert_eq!(w("https://x.org/a").as_deref(), Some("https://x.org/a"));
+        assert_eq!(w("http://x.org").as_deref(), Some("http://x.org"));
+        assert_eq!(w("veltronza.com").as_deref(), Some("https://veltronza.com"));
+        assert_eq!(
+            w(" www.x.org/a?b=1 ").as_deref(),
+            Some("https://www.x.org/a?b=1")
+        );
+        assert_eq!(w("x.org:8080/p").as_deref(), Some("https://x.org:8080/p"));
+        assert_eq!(w("münchen.de").as_deref(), Some("https://münchen.de"));
+        assert_eq!(w("javascript:alert(1)"), None);
+        assert_eq!(w("mailto:a@x.org"), None);
+        assert_eq!(w("file:///etc/passwd"), None);
+        assert_eq!(w("ftp://x.org"), None);
+        assert_eq!(w("localhost"), None);
+        assert_eq!(w("not a url"), None);
+        assert_eq!(w(""), None);
     }
 
     #[test]
