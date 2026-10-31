@@ -16,6 +16,7 @@ fastrand.workspace = true
 futures-util.workspace = true
 gethostname.workspace = true
 jiff.workspace = true
+ksni.workspace = true
 nudge-api.workspace = true
 oo7.workspace = true
 rodio.workspace = true

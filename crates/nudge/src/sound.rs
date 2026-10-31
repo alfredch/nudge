@@ -16,6 +16,7 @@ use rodio::{Decoder, DeviceSinkBuilder, Player as RodioPlayer, Source};
 use tracing::{debug, warn};
 
 use crate::config;
+use crate::notify::{self, Conditions, Urgency};
 
 /// Sounds waiting while one plays; more are dropped.
 const QUEUE: usize = 4;
@@ -29,13 +30,15 @@ const MAX_LENGTH: Duration = Duration::from_secs(30);
 const SILENT: [&str; 4] = ["no", "none", "vi", "vibrate"];
 
 /// Name of the sound to play for a message, or `None` for silence.
-/// Priority -1 is silent by definition, and so are -1/0 during quiet hours.
+/// Follows the display decision: no notification or low urgency (priority
+/// -1, quiet hours) means no sound.
 pub fn sound_for<'a>(
     message: &'a Message,
     config: &'a config::Sound,
-    quiet: bool,
+    conditions: Conditions,
 ) -> Option<&'a str> {
-    if !config.enabled || message.priority < 0 || (quiet && message.priority <= 0) {
+    let display = notify::display_for(message, conditions)?;
+    if !config.enabled || display.urgency == Urgency::Low {
         return None;
     }
     let name = message
@@ -123,11 +126,11 @@ mod tests {
     fn chooses_message_sound_or_default() {
         let c = config::Sound::default();
         let m = msg(serde_json::json!({"id": 1, "sound": "bike"}));
-        assert_eq!(sound_for(&m, &c, false), Some("bike"));
+        assert_eq!(sound_for(&m, &c, Conditions::default()), Some("bike"));
         let m = msg(serde_json::json!({"id": 1}));
-        assert_eq!(sound_for(&m, &c, false), Some("pushover"));
+        assert_eq!(sound_for(&m, &c, Conditions::default()), Some("pushover"));
         let m = msg(serde_json::json!({"id": 1, "sound": ""}));
-        assert_eq!(sound_for(&m, &c, false), Some("pushover"));
+        assert_eq!(sound_for(&m, &c, Conditions::default()), Some("pushover"));
     }
 
     #[test]
@@ -141,14 +144,18 @@ mod tests {
             serde_json::json!({"id": 1, "priority": -1}),
             serde_json::json!({"id": 1, "priority": -2}),
         ] {
-            assert_eq!(sound_for(&msg(json), &c, false), None);
+            assert_eq!(sound_for(&msg(json), &c, Conditions::default()), None);
         }
         let off = config::Sound {
             enabled: false,
             ..config::Sound::default()
         };
         assert_eq!(
-            sound_for(&msg(serde_json::json!({"id": 1})), &off, false),
+            sound_for(
+                &msg(serde_json::json!({"id": 1})),
+                &off,
+                Conditions::default()
+            ),
             None
         );
         let silent_default = config::Sound {
@@ -156,7 +163,11 @@ mod tests {
             ..config::Sound::default()
         };
         assert_eq!(
-            sound_for(&msg(serde_json::json!({"id": 1})), &silent_default, false),
+            sound_for(
+                &msg(serde_json::json!({"id": 1})),
+                &silent_default,
+                Conditions::default()
+            ),
             None
         );
     }
@@ -165,8 +176,16 @@ mod tests {
     fn quiet_hours_silence_only_normal_and_low() {
         let c = config::Sound::default();
         let p = |prio: i8| msg(serde_json::json!({"id": 1, "priority": prio}));
-        assert_eq!(sound_for(&p(0), &c, true), None);
-        assert_eq!(sound_for(&p(1), &c, true), Some("pushover"));
-        assert_eq!(sound_for(&p(2), &c, true), Some("pushover"));
+        assert_eq!(sound_for(&p(0), &c, Conditions::QUIET), None);
+        assert_eq!(sound_for(&p(1), &c, Conditions::QUIET), Some("pushover"));
+        assert_eq!(sound_for(&p(2), &c, Conditions::QUIET), Some("pushover"));
+    }
+
+    #[test]
+    fn pause_silences_all_but_emergencies() {
+        let c = config::Sound::default();
+        let p = |prio: i8| msg(serde_json::json!({"id": 1, "priority": prio, "receipt": "r"}));
+        assert_eq!(sound_for(&p(1), &c, Conditions::PAUSED), None);
+        assert_eq!(sound_for(&p(2), &c, Conditions::PAUSED), Some("pushover"));
     }
 }

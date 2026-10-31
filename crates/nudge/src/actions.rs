@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use crate::history::History;
 use crate::notify::{Action, Invoked, Notifier, Target, is_web_url};
+use crate::status::StatusTx;
 
 /// A command line tool that puts its stdin on the clipboard.
 #[derive(Debug, Clone)]
@@ -68,6 +69,7 @@ pub struct Handler {
     pub secret: Secret,
     pub notifier: Notifier,
     pub history: History,
+    pub status: StatusTx,
     pub clipboard: Option<Clipboard>,
 }
 
@@ -98,6 +100,7 @@ impl Handler {
         match result {
             Ok(()) => {
                 info!("message {} acknowledged", target.message);
+                self.status.send_modify(|s| s.remove_alert(receipt));
                 if let Err(e) = self.notifier.close_receipt(receipt).await {
                     warn!("cannot close notification: {e:#}");
                 }

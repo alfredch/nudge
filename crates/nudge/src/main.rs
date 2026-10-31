@@ -2,14 +2,17 @@ mod actions;
 mod backoff;
 mod cache;
 mod config;
+mod control;
 mod credentials;
 mod daemon;
+mod export;
 mod history;
 mod instance;
 mod login;
 mod notify;
 mod paths;
 mod sound;
+mod status;
 mod wake;
 
 use std::process::ExitCode;

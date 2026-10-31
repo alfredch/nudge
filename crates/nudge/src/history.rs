@@ -5,12 +5,50 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use nudge_api::{DeviceId, Fetched, MessageId, Receipt};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 
 const SCHEMA_VERSION: i32 = 1;
 
 pub struct History {
     conn: Connection,
+}
+
+/// A stored message as read back for display.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub id: Option<u64>,
+    /// Message date, or the time it was received for unreadable entries.
+    pub date: i64,
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub priority: i8,
+    pub url: Option<String>,
+    pub url_title: Option<String>,
+    pub html: bool,
+    pub acked: bool,
+    pub malformed: bool,
+}
+
+impl Entry {
+    /// Title as shown in notifications: the title, else the app name.
+    pub fn display_title(&self) -> &str {
+        self.title
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .or(self.app.as_deref())
+            .unwrap_or("")
+    }
+}
+
+/// Which entries `query` returns, newest first.
+#[derive(Debug, Clone, Default)]
+pub struct Filter {
+    /// Case-insensitive app name.
+    pub app: Option<String>,
+    /// Unix time; older entries are skipped.
+    pub since: Option<i64>,
+    pub limit: usize,
 }
 
 /// What `store` actually inserted; entries seen before are skipped.
@@ -32,6 +70,68 @@ impl History {
         // The daemon and the action handler write concurrently.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Self::init(conn)
+    }
+
+    /// Opens an existing database without changing it. `None` if there is
+    /// no history yet; a read-only command must not create one.
+    pub fn open_read_only(path: &Path) -> Result<Option<Self>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .with_context(|| format!("cannot open {}", path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match version {
+            0 => Ok(None),
+            SCHEMA_VERSION => Ok(Some(Self { conn })),
+            other => bail!("history database has unknown schema version {other}"),
+        }
+    }
+
+    pub fn query(&self, filter: &Filter) -> Result<Vec<Entry>> {
+        let limit = i64::try_from(filter.limit).unwrap_or(i64::MAX);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, COALESCE(date, received_at), app, title, message, COALESCE(priority, 0),
+                    url, url_title, html, acked, malformed
+             FROM messages
+             WHERE (?1 IS NULL OR app = ?1 COLLATE NOCASE)
+               AND (?2 IS NULL OR COALESCE(date, received_at) >= ?2)
+             ORDER BY COALESCE(date, received_at) DESC, rowid DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![filter.app, filter.since, limit], |row| {
+            Ok(Entry {
+                id: row
+                    .get::<_, Option<i64>>(0)?
+                    .and_then(|id| u64::try_from(id).ok()),
+                date: row.get(1)?,
+                app: row.get(2)?,
+                title: row.get(3)?,
+                message: row.get(4)?,
+                priority: row.get(5)?,
+                url: row.get(6)?,
+                url_title: row.get(7)?,
+                html: row.get(8)?,
+                acked: row.get(9)?,
+                malformed: row.get(10)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Date of the newest message, for `nudge status` without a daemon.
+    pub fn newest(&self) -> Result<Option<Entry>> {
+        Ok(self
+            .query(&Filter {
+                limit: 1,
+                ..Filter::default()
+            })?
+            .into_iter()
+            .next())
     }
 
     #[cfg(test)]
@@ -243,6 +343,60 @@ mod tests {
             .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn query_filters_and_orders() {
+        let mut h = History::in_memory().unwrap();
+        let messages = [(1, "Alpha", 100), (2, "beta", 300), (3, "Alpha", 200)]
+            .into_iter()
+            .map(|(id, app, date)| {
+                serde_json::from_value(serde_json::json!({"id": id, "app": app, "date": date}))
+                    .unwrap()
+            })
+            .collect();
+        h.store(
+            &DeviceId::new("dev"),
+            &Fetched {
+                messages,
+                malformed: Vec::new(),
+            },
+        )
+        .unwrap();
+        let ids = |f: Filter| -> Vec<Option<u64>> {
+            h.query(&f).unwrap().into_iter().map(|e| e.id).collect()
+        };
+        let all = Filter {
+            limit: 10,
+            ..Filter::default()
+        };
+        assert_eq!(ids(all.clone()), [Some(2), Some(3), Some(1)]);
+        assert_eq!(
+            ids(Filter {
+                app: Some("alpha".into()),
+                ..all.clone()
+            }),
+            [Some(3), Some(1)]
+        );
+        assert_eq!(
+            ids(Filter {
+                since: Some(200),
+                ..all.clone()
+            }),
+            [Some(2), Some(3)]
+        );
+        assert_eq!(ids(Filter { limit: 1, ..all }), [Some(2)]);
+        assert_eq!(h.newest().unwrap().unwrap().display_title(), "beta");
+    }
+
+    #[test]
+    fn read_only_does_not_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        assert!(History::open_read_only(&path).unwrap().is_none());
+        assert!(!path.exists());
+        History::open(&path).unwrap();
+        assert!(History::open_read_only(&path).unwrap().is_some());
     }
 
     #[test]

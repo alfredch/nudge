@@ -90,17 +90,40 @@ pub struct Display {
     pub persistent: bool,
 }
 
-/// `None` means history only, no notification. During quiet hours,
-/// priority -1 and 0 are delivered silently (low urgency, no banner on
-/// most servers); priority 1 and 2 are not affected.
-pub fn display_for(message: &Message, quiet: bool) -> Option<Display> {
+/// Circumstances that change how messages are delivered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Conditions {
+    /// Quiet hours: priority -1 and 0 arrive silently.
+    pub quiet: bool,
+    /// Paused: priority -1 to 1 go to the history only.
+    pub paused: bool,
+}
+
+#[cfg(test)]
+impl Conditions {
+    pub const QUIET: Self = Self {
+        quiet: true,
+        paused: false,
+    };
+    pub const PAUSED: Self = Self {
+        quiet: false,
+        paused: true,
+    };
+}
+
+/// The single place that decides how a message is shown; sounds follow
+/// from it. `None` means history only, no notification. Low urgency means
+/// silent (no sound, no banner on most servers). Emergencies (priority 2)
+/// always get through.
+pub fn display_for(message: &Message, conditions: Conditions) -> Option<Display> {
     let (urgency, persistent) = match message.priority {
         i8::MIN..=-2 => return None,
-        -1 => (Urgency::Low, false),
-        0 if quiet => (Urgency::Low, false),
-        0 => (Urgency::Normal, false),
-        1 => (Urgency::Critical, false),
         2.. => (Urgency::Critical, message.requires_persistent_display()),
+        _ if conditions.paused => return None,
+        -1 => (Urgency::Low, false),
+        0 if conditions.quiet => (Urgency::Low, false),
+        0 => (Urgency::Normal, false),
+        _ => (Urgency::Critical, false),
     };
     Some(Display {
         urgency,
@@ -228,10 +251,10 @@ impl Notifier {
     pub async fn show_message(
         &self,
         message: &Message,
-        quiet: bool,
+        conditions: Conditions,
         icon: Option<&Path>,
     ) -> Result<()> {
-        let Some(display) = display_for(message, quiet) else {
+        let Some(display) = display_for(message, conditions) else {
             return Ok(());
         };
         let mut body = match (message.html, self.inner.markup) {
@@ -301,11 +324,12 @@ impl Notifier {
         Ok(())
     }
 
-    /// One notification for messages that arrived while nudge was not running.
-    pub async fn show_summary(&self, messages: &[&Message], quiet: bool) -> Result<()> {
+    /// One notification for several messages, e.g. "3 messages while you
+    /// were away" (`when` = "while you were away").
+    pub async fn show_summary(&self, when: &str, messages: &[&Message], quiet: bool) -> Result<()> {
         let summary = match messages.len() {
-            1 => "1 message while you were away".to_owned(),
-            n => format!("{n} messages while you were away"),
+            1 => format!("1 message {when}"),
+            n => format!("{n} messages {when}"),
         };
         let mut lines: Vec<String> = messages
             .iter()
@@ -664,7 +688,12 @@ mod tests {
 
     #[test]
     fn priority_mapping() {
-        let d = |p: i8| display_for(&msg(serde_json::json!({"id": 1, "priority": p})), false);
+        let d = |p: i8| {
+            display_for(
+                &msg(serde_json::json!({"id": 1, "priority": p})),
+                Conditions::default(),
+            )
+        };
         assert_eq!(d(-2), None);
         assert_eq!(d(-1).map(|d| d.urgency), Some(Urgency::Low));
         assert_eq!(d(0).map(|d| d.urgency), Some(Urgency::Normal));
@@ -687,12 +716,20 @@ mod tests {
     #[test]
     fn acked_emergency_is_not_persistent() {
         let m = msg(serde_json::json!({"id": 1, "priority": 2, "acked": 1}));
-        assert_eq!(display_for(&m, false).map(|d| d.persistent), Some(false));
+        assert_eq!(
+            display_for(&m, Conditions::default()).map(|d| d.persistent),
+            Some(false)
+        );
     }
 
     #[test]
     fn quiet_hours_silence_only_low_and_normal() {
-        let d = |p: i8| display_for(&msg(serde_json::json!({"id": 1, "priority": p})), true);
+        let d = |p: i8| {
+            display_for(
+                &msg(serde_json::json!({"id": 1, "priority": p})),
+                Conditions::QUIET,
+            )
+        };
         assert_eq!(d(-2), None);
         assert_eq!(d(-1).map(|d| d.urgency), Some(Urgency::Low));
         assert_eq!(d(0).map(|d| d.urgency), Some(Urgency::Low));
@@ -710,6 +747,25 @@ mod tests {
             url: None,
             text: String::new(),
         }
+    }
+
+    #[test]
+    fn pause_holds_back_all_but_emergencies() {
+        let d = |p: i8, acked: u8| {
+            display_for(
+                &msg(serde_json::json!({"id": 1, "priority": p, "acked": acked})),
+                Conditions::PAUSED,
+            )
+        };
+        assert_eq!(d(-1, 0), None);
+        assert_eq!(d(0, 0), None);
+        assert_eq!(d(1, 0), None);
+        assert_eq!(
+            d(2, 0).map(|d| (d.urgency, d.persistent)),
+            Some((Urgency::Critical, true))
+        );
+        // An already acknowledged emergency is shown, not held back.
+        assert_eq!(d(2, 1).map(|d| d.persistent), Some(false));
     }
 
     #[test]
@@ -758,7 +814,9 @@ mod tests {
             "id": 1, "priority": 2, "receipt": "smoke", "title": "nudge smoke test",
             "message": "<b>emergency</b> & resident", "html": 1, "url": "https://example.org"
         }));
-        n.show_message(&m, false, None).await.unwrap();
+        n.show_message(&m, Conditions::default(), None)
+            .await
+            .unwrap();
         n.close_receipt(&Receipt::new("smoke")).await.unwrap();
     }
 

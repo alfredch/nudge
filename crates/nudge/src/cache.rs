@@ -108,6 +108,15 @@ impl Cache {
     }
 }
 
+/// Path of an already cached file, without downloading.
+pub fn cached(dir: &Path, kind: Kind, name: &str) -> Option<PathBuf> {
+    let name = ResourceName::new(name).ok()?;
+    let path = dir
+        .join(kind.dir())
+        .join(format!("{}.{}", name.as_str(), kind.extension()));
+    path.is_file().then_some(path)
+}
+
 /// Writes via a temporary file, so an interrupted download never leaves a
 /// truncated file that would be used from then on.
 async fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {

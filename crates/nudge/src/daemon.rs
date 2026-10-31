@@ -1,5 +1,6 @@
 //! The long-running receive loop.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
@@ -7,7 +8,7 @@ use std::collections::HashMap;
 
 use nudge_api::{Client, DEFAULT_PUSH_URL, Frame, Message, MessageId, PushStream, Receipt};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, trace, warn};
 
@@ -15,12 +16,14 @@ use crate::actions::{self, Clipboard};
 use crate::backoff::Backoff;
 use crate::cache::{self, Cache};
 use crate::config::Config;
+use crate::control::{self, Control, Controller};
 use crate::credentials::{self, Backend, Credentials};
 use crate::history::History;
 use crate::instance;
-use crate::notify::{self, Notifier};
+use crate::notify::{self, Conditions, Notifier};
 use crate::paths::{APP_ID, Paths};
 use crate::sound;
+use crate::status::{Status, StatusTx, unix_now};
 use crate::wake::{self, WakeReceiver};
 
 /// No keep-alive within this time means the connection is dead.
@@ -70,13 +73,14 @@ struct Daemon {
     cache: Cache,
     sound: sound::Player,
     config: watch::Receiver<Config>,
+    status: StatusTx,
     backoff: Backoff,
     wake: WakeReceiver,
     last_prune: Option<Instant>,
 }
 
 pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
-    let Some(_instance) = instance::acquire(APP_ID).await? else {
+    let Some(instance) = instance::acquire(APP_ID).await? else {
         return Ok(Exit::AlreadyRunning);
     };
     let config_path = paths.config_file();
@@ -105,16 +109,42 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
     }
     let (notifier, clicks) = Notifier::connect(clipboard.is_some()).await?;
     let client = Client::new(&user_agent)?;
+    let (status_tx, status_rx) = watch::channel(Status::new(credentials.device_id.to_string()));
     let handler = actions::Handler {
         client: client.clone(),
         secret: credentials.secret.clone(),
         notifier: notifier.clone(),
         history: History::open(&history_path)?,
+        status: status_tx.clone(),
         clipboard,
     };
     tokio::spawn(handler.run(clicks));
 
     let (config_tx, config_rx) = watch::channel(config);
+    let quit = Arc::new(Notify::new());
+    let (control, commands) = Control::channel();
+    tokio::spawn(
+        Controller {
+            status: status_tx.clone(),
+            notifier: notifier.clone(),
+            config: config_rx.clone(),
+            paths: paths.clone(),
+            quit: quit.clone(),
+        }
+        .run(commands),
+    );
+    instance
+        .connection()
+        .object_server()
+        .at(
+            control::OBJECT_PATH,
+            control::Interface {
+                control: control.clone(),
+                status: status_rx.clone(),
+            },
+        )
+        .await
+        .context("cannot register the D-Bus interface")?;
     let mut sighup = signal(SignalKind::hangup())?;
     tokio::spawn(async move {
         while sighup.recv().await.is_some() {
@@ -131,6 +161,7 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
         history: History::open(&history_path)?,
         notifier: notifier.clone(),
         config: config_rx,
+        status: status_tx,
         backoff: Backoff::default(),
         wake: wake::spawn(),
         last_prune: None,
@@ -146,6 +177,7 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
             Ok(exit)
         }
         _ = tokio::signal::ctrl_c() => Ok(Exit::Shutdown),
+        () = quit.notified() => Ok(Exit::Shutdown),
         _ = sigterm.recv() => Ok(Exit::Shutdown),
     }
 }
@@ -157,6 +189,7 @@ impl Daemon {
             self.wake.borrow_and_update();
             let started = Instant::now();
             let end = self.session().await;
+            self.status.send_modify(|s| s.connected_since = None);
             if started.elapsed() >= STABLE_SESSION {
                 self.backoff.reset();
             }
@@ -195,6 +228,8 @@ impl Daemon {
         .await
         .context("cannot connect to the push server")?;
         info!("connected to push server, waiting for messages");
+        self.status
+            .send_modify(|s| s.connected_since = Some(unix_now()));
 
         // Connect first, then fetch: anything arriving after this point
         // triggers a `!`, so nothing slips through between the two steps.
@@ -357,18 +392,33 @@ impl Daemon {
     }
 
     async fn announce(&mut self, messages: &[&Message], mode: Mode) {
-        let quiet = self.config.borrow().quiet_hours.active();
+        let conditions = Conditions {
+            quiet: self.config.borrow().quiet_hours.active(),
+            paused: self.status.borrow().paused(),
+        };
         let (hidden, visible): (Vec<&Message>, Vec<&Message>) = messages
             .iter()
             .copied()
-            .partition(|m| notify::display_for(m, quiet).is_none());
+            .partition(|m| notify::display_for(m, conditions).is_none());
+        let mut held_back = Vec::new();
         for m in hidden {
-            log_message(m, "history only");
+            if m.priority >= -1 {
+                log_message(m, "held back, paused");
+                held_back.push((*m).clone());
+            } else {
+                log_message(m, "history only");
+            }
         }
+        self.status.send_modify(|s| {
+            s.held_back.extend(held_back);
+            for m in messages.iter().rev().filter(|m| m.priority >= -1) {
+                s.add_recent(m);
+            }
+        });
 
         if mode == Mode::Live || visible.len() <= 1 {
             for m in visible {
-                self.show(m, quiet).await;
+                self.show(m, conditions).await;
             }
             return;
         }
@@ -377,29 +427,35 @@ impl Daemon {
             .into_iter()
             .partition(|m| m.requires_persistent_display());
         for m in persistent {
-            self.show(m, quiet).await;
+            self.show(m, conditions).await;
         }
         match rest.as_slice() {
             [] => {}
-            [single] => self.show(single, quiet).await,
+            [single] => self.show(single, conditions).await,
             _ => {
                 for m in &rest {
                     log_message(m, "summarized");
                 }
-                report(self.notifier.show_summary(&rest, quiet).await);
+                report(
+                    self.notifier
+                        .show_summary("while you were away", &rest, conditions.quiet)
+                        .await,
+                );
             }
         }
     }
 
-    async fn show(&mut self, message: &Message, quiet: bool) {
-        let action = match notify::display_for(message, quiet) {
+    async fn show(&mut self, message: &Message, conditions: Conditions) {
+        let display = notify::display_for(message, conditions);
+        let action = match display {
             Some(d) if d.persistent => "shown, persistent",
-            Some(d) if quiet && d.urgency == notify::Urgency::Low && message.priority == 0 => {
-                "shown quietly"
-            }
+            Some(_) if conditions.quiet && message.priority == 0 => "shown quietly",
             _ => "shown",
         };
         log_message(message, action);
+        if display.is_some_and(|d| d.persistent) {
+            self.status.send_modify(|s| s.add_alert(message));
+        }
 
         let icon = match message.icon.as_deref() {
             Some(name) => self.cache.get(cache::Kind::Icon, name).await,
@@ -407,12 +463,12 @@ impl Daemon {
         };
         report(
             self.notifier
-                .show_message(message, quiet, icon.as_deref())
+                .show_message(message, conditions, icon.as_deref())
                 .await,
         );
 
         let sound = self.config.borrow().sound.clone();
-        if let Some(name) = sound::sound_for(message, &sound, quiet) {
+        if let Some(name) = sound::sound_for(message, &sound, conditions) {
             let mut path = self.cache.get(cache::Kind::Sound, name).await;
             // An unavailable custom sound must not silence the message.
             if path.is_none() && name != sound.default {

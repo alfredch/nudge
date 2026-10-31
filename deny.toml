@@ -23,6 +23,7 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    "Unlicense",
     "CDLA-Permissive-2.0",
     "OpenSSL",
     # File-level copyleft, compatible with distributing under MIT/Apache (option-ext via directories).

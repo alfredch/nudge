@@ -148,7 +148,7 @@ pub async fn delete(paths: &Paths) -> Result<bool> {
     Ok(found)
 }
 
-fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+pub fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::DirBuilder::new()
             .recursive(true)

@@ -8,6 +8,13 @@ pub struct Instance {
     _conn: zbus::Connection,
 }
 
+impl Instance {
+    /// The connection owning the name; the daemon serves its interface here.
+    pub fn connection(&self) -> &zbus::Connection {
+        &self._conn
+    }
+}
+
 /// Claims `name`. `None` if another process already owns it.
 pub async fn acquire(name: &str) -> Result<Option<Instance>> {
     let conn = zbus::Connection::session()
