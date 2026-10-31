@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use tracing::{debug, info};
 use zbus::zvariant::{Fd, OwnedObjectPath, Value};
 
-use crate::control::local_time;
+use crate::control::local_datetime;
 use crate::credentials::write_private;
 use crate::history::{Entry, Filter, History};
 use crate::notify::{html_to_text, web_url};
@@ -104,7 +104,7 @@ fn render(entries: &[Entry], generated: &str) -> String {
             rows,
             "<tr{class}><td class=\"date\">{}</td><td>{}</td><td class=\"prio\">{}</td>\
              <td><strong>{}</strong><div class=\"text\">{}</div>{}</td></tr>",
-            escape(&local_date(e.date)),
+            escape(&local_datetime(e.date)),
             escape(e.app.as_deref().unwrap_or("")),
             e.priority,
             escape(e.display_title()),
@@ -158,16 +158,6 @@ tr.low {{ color: var(--muted); }}
         count = entries.len(),
         generated = escape(generated),
     )
-}
-
-fn local_date(unix: i64) -> String {
-    jiff::Timestamp::from_second(unix)
-        .map(|t| {
-            t.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| local_time(unix))
 }
 
 fn escape(text: &str) -> String {

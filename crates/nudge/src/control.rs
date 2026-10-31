@@ -194,6 +194,17 @@ pub fn local_time(unix: i64) -> String {
         .unwrap_or_else(|_| unix.to_string())
 }
 
+/// Local date and time, e.g. "2026-10-30 14:30".
+pub fn local_datetime(unix: i64) -> String {
+    Timestamp::from_second(unix)
+        .map(|t| {
+            t.to_zoned(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| unix.to_string())
+}
+
 fn seconds_until(unix: i64) -> Duration {
     Duration::from_secs(u64::try_from(unix.saturating_sub(unix_now())).unwrap_or(0))
 }

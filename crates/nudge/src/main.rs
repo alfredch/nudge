@@ -1,6 +1,7 @@
 mod actions;
 mod backoff;
 mod cache;
+mod cli;
 mod config;
 mod control;
 mod credentials;
@@ -50,6 +51,30 @@ enum Command {
     Logout,
     /// Receive messages in the foreground (used by the systemd service).
     Daemon,
+    /// Show whether the daemon is connected, paused, and the last message.
+    Status,
+    /// Pause notifications; emergencies (priority 2) still get through.
+    Pause {
+        /// How long, e.g. 30m, 2h, 1d. Without it: until `nudge resume`.
+        duration: Option<String>,
+    },
+    /// End a pause and summarize the messages held back.
+    Resume,
+    /// List received messages, oldest first.
+    History {
+        /// Only messages from this app.
+        #[arg(long)]
+        app: Option<String>,
+        /// Only messages newer than this: a duration (2d, 3h) or a date (2026-10-30).
+        #[arg(long)]
+        since: Option<String>,
+        /// Show at most this many (the newest).
+        #[arg(long, short = 'n', default_value_t = 20)]
+        limit: usize,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -71,6 +96,15 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Login { new_device } => login::login(&paths, &user_agent, new_device).await?,
         Command::Logout => login::logout(&paths).await?,
+        Command::Status => return cli::status(&paths).await,
+        Command::Pause { duration } => return cli::pause(duration.as_deref()).await,
+        Command::Resume => return cli::resume().await,
+        Command::History {
+            app,
+            since,
+            limit,
+            json,
+        } => return cli::history(&paths, app, since.as_deref(), limit, json),
         Command::Daemon => match daemon::run(&paths, user_agent).await? {
             daemon::Exit::Shutdown => {}
             daemon::Exit::NeedsLogin(reason) => {

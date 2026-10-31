@@ -14,7 +14,7 @@ pub struct History {
 }
 
 /// A stored message as read back for display.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Entry {
     pub id: Option<u64>,
     /// Message date, or the time it was received for unreadable entries.
