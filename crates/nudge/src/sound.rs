@@ -24,8 +24,9 @@ const MAX_LENGTH: Duration = Duration::from_secs(30);
 
 /// Sound names that mean silence.
 /// Messages carry short codes (verified: "None (silent)" arrives as "no",
-/// "Bike" as "bk"); the long names are accepted for the configured default.
-const SILENT: [&str; 3] = ["no", "none", "vibrate"];
+/// "Vibrate Only" as "vi", "Bike" as "bk"); the long names are accepted for
+/// the configured default.
+const SILENT: [&str; 4] = ["no", "none", "vi", "vibrate"];
 
 /// Name of the sound to play for a message, or `None` for silence.
 /// Priority -1 is silent by definition, and so are -1/0 during quiet hours.
@@ -135,6 +136,7 @@ mod tests {
         for json in [
             serde_json::json!({"id": 1, "sound": "no"}),
             serde_json::json!({"id": 1, "sound": "none"}),
+            serde_json::json!({"id": 1, "sound": "vi"}),
             serde_json::json!({"id": 1, "sound": "vibrate"}),
             serde_json::json!({"id": 1, "priority": -1}),
             serde_json::json!({"id": 1, "priority": -2}),

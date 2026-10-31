@@ -30,7 +30,7 @@ Ergänzt `PLAN.md`. Bei Widerspruch gilt dieses Dokument.
 | Ruhezeiten | Priorität -1 und 0 werden still zugestellt: Urgency low, kein Ton. Priorität 1 und 2 sind nicht betroffen. Keine Ausnahmen pro App (wer durchkommen will, sendet mit Priorität 1). |
 | Kopieren | Über `wl-copy` (Wayland) oder `xclip` (X11/Xwayland). Der Button erscheint nur, wenn eines davon installiert ist. Paket: `Recommends: wl-clipboard`. |
 | Notifications | Direkt über zbus statt notify-rust: eine Verbindung für `Notify` und die Action-Signale, keine `unwrap()` in Fremdcode. |
-| Sounds | rodio, das Audiogerät wird pro Sound geöffnet. Ohne `sound`-Feld wird `sound.default` gespielt (Default `pushover`, wie in der Message-API dokumentiert). Still sind `no` und `none` sowie `vibrate`. Verifiziert am 2026-10-31: Meldungen tragen zweistellige Codes, nicht die Namen aus der Message-API. „None (silent)“ kommt als `no` an, „Bike“ als `bk` (`sounds/bk.mp3` existiert). Der Code für „Vibrate Only“ ist noch offen. Laufzeitabhängigkeit: libasound2. |
+| Sounds | rodio, das Audiogerät wird pro Sound geöffnet. Ohne `sound`-Feld wird `sound.default` gespielt (Default `pushover`, wie in der Message-API dokumentiert). Still sind `no`/`none` und `vi`/`vibrate`. Verifiziert am 2026-10-31: Meldungen tragen zweistellige Codes, nicht die Namen aus der Message-API. „None (silent)“ kommt als `no` an, „Vibrate Only“ als `vi`, „Bike“ als `bk` (`sounds/bk.mp3` existiert). Laufzeitabhängigkeit: libasound2. |
 
 ## Offene Punkte
 
