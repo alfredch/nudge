@@ -295,10 +295,14 @@ impl Daemon {
             }
             _ => true,
         });
-        // Retries of an emergency the user already acknowledged here.
+        // Repeats of an emergency the user acknowledged here, or is acknowledging.
         tokio::task::block_in_place(|| {
             new.retain(|m| match &m.receipt {
-                Some(r) if m.priority >= 2 && self.history.is_acked(r).unwrap_or(false) => {
+                Some(r)
+                    if m.priority >= 2
+                        && (self.notifier.is_acknowledging(r)
+                            || self.history.is_acked(r).unwrap_or(false)) =>
+                {
                     log_message(m, "already acknowledged");
                     false
                 }

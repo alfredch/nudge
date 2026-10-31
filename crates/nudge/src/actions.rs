@@ -88,10 +88,16 @@ impl Handler {
         let Some(receipt) = &target.receipt else {
             return;
         };
-        match self.client.acknowledge(&self.secret, receipt).await {
+        self.notifier.set_acknowledging(receipt, true);
+        let result = self.client.acknowledge(&self.secret, receipt).await;
+        if result.is_ok() {
+            // Before clearing the flag, so no repeat slips through in between.
+            self.mark_acked(receipt);
+        }
+        self.notifier.set_acknowledging(receipt, false);
+        match result {
             Ok(()) => {
                 info!("message {} acknowledged", target.message);
-                self.mark_acked(receipt);
                 if let Err(e) = self.notifier.close_receipt(receipt).await {
                     warn!("cannot close notification: {e:#}");
                 }

@@ -4,7 +4,7 @@
 //! deliver `ActionInvoked` only to the connection that created the
 //! notification.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -347,6 +347,21 @@ impl Notifier {
         Ok(())
     }
 
+    /// Marks an acknowledgement as running (`true`) or finished. Meanwhile
+    /// repeats of the message are not shown again.
+    pub fn set_acknowledging(&self, receipt: &Receipt, running: bool) {
+        let mut state = self.state();
+        if running {
+            state.acknowledging.insert(receipt.clone());
+        } else {
+            state.acknowledging.remove(receipt);
+        }
+    }
+
+    pub fn is_acknowledging(&self, receipt: &Receipt) -> bool {
+        self.state().acknowledging.contains(receipt)
+    }
+
     /// Closes the notification showing this receipt, if there is one.
     pub async fn close_receipt(&self, receipt: &Receipt) -> Result<()> {
         let Some(id) = self.state().forget_receipt(receipt) else {
@@ -413,6 +428,8 @@ struct State {
     targets: BTreeMap<u32, Target>,
     /// Emergency notifications, so retries and acknowledgements find them.
     by_receipt: HashMap<Receipt, u32>,
+    /// Receipts whose acknowledgement is in flight.
+    acknowledging: HashSet<Receipt>,
 }
 
 impl State {
