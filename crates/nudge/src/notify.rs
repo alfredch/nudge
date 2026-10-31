@@ -12,6 +12,8 @@ use anyhow::{Context as _, Result};
 use futures_util::StreamExt;
 use nudge_api::{Message, MessageId, Receipt};
 use tokio::sync::mpsc;
+
+use crate::paths::APP_ID;
 use tracing::{debug, warn};
 use zbus::zvariant::Value;
 
@@ -415,6 +417,8 @@ impl Notifier {
             .collect();
         let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
         hints.insert("urgency", Value::U8(note.urgency as u8));
+        // Lets the server show nudge's name and icon and its settings apply.
+        hints.insert("desktop-entry", Value::Str(APP_ID.into()));
         // nudge plays message sounds itself.
         hints.insert("suppress-sound", Value::Bool(true));
         if note.persistent {

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Nudge
+GenericName=Push Notifications
+Comment=Unofficial Pushover Open Client
+Exec=nudge daemon
+Icon=io.github.alfredch.Nudge
+Terminal=false
+NoDisplay=true
+Categories=Network;
+X-GNOME-UsesNotifications=true

@@ -18,18 +18,56 @@ const PAUSES: [(&str, Option<Duration>); 4] = [
     ("Until resumed", None),
 ];
 
-/// Icon theme names until nudge ships its own icons (M6); all exist in
-/// Adwaita.
-const ICON_CONNECTED: &str = "preferences-system-notifications-symbolic";
-const ICON_DISCONNECTED: &str = "network-offline-symbolic";
-const ICON_PAUSED: &str = "notifications-disabled-symbolic";
-const ICON_ALERT: &str = "dialog-warning-symbolic";
+/// Icon names per state: nudge's own (installed by the packages under
+/// `hicolor/symbolic/apps`) and Adwaita fallbacks for uninstalled builds.
+struct Icons {
+    connected: &'static str,
+    disconnected: &'static str,
+    paused: &'static str,
+    alert: &'static str,
+}
+
+const OWN_ICONS: Icons = Icons {
+    connected: "io.github.alfredch.Nudge-symbolic",
+    disconnected: "io.github.alfredch.Nudge-offline-symbolic",
+    paused: "io.github.alfredch.Nudge-paused-symbolic",
+    alert: "io.github.alfredch.Nudge-alert-symbolic",
+};
+
+const FALLBACK_ICONS: Icons = Icons {
+    connected: "preferences-system-notifications-symbolic",
+    disconnected: "network-offline-symbolic",
+    paused: "notifications-disabled-symbolic",
+    alert: "dialog-warning-symbolic",
+};
+
+/// Whether nudge's icons are installed in one of the XDG data dirs.
+fn own_icons_installed() -> bool {
+    let home = directories::BaseDirs::new().map(|d| d.data_dir().to_path_buf());
+    let system = std::env::var_os("XDG_DATA_DIRS")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    home.into_iter()
+        .chain(std::env::split_paths(&system))
+        .any(|dir| {
+            dir.join("icons/hicolor/symbolic/apps")
+                .join(format!("{}.svg", OWN_ICONS.connected))
+                .is_file()
+        })
+}
 
 /// Starts the tray and keeps it in sync with the status.
 pub async fn spawn(control: Control, mut status: StatusRx) {
+    let icons = if own_icons_installed() {
+        &OWN_ICONS
+    } else {
+        debug!("nudge icons not installed, using theme icons");
+        &FALLBACK_ICONS
+    };
     let tray = Tray {
         status: status.borrow().clone(),
         control,
+        icons,
     };
     let handle = match tray.spawn().await {
         Ok(handle) => handle,
@@ -53,6 +91,7 @@ pub async fn spawn(control: Control, mut status: StatusRx) {
 struct Tray {
     status: Status,
     control: Control,
+    icons: &'static Icons,
 }
 
 impl Tray {
@@ -106,17 +145,17 @@ impl ksni::Tray for Tray {
 
     fn icon_name(&self) -> String {
         if self.status.paused() {
-            ICON_PAUSED
+            self.icons.paused
         } else if self.status.connected_since.is_some() {
-            ICON_CONNECTED
+            self.icons.connected
         } else {
-            ICON_DISCONNECTED
+            self.icons.disconnected
         }
         .to_owned()
     }
 
     fn attention_icon_name(&self) -> String {
-        ICON_ALERT.to_owned()
+        self.icons.alert.to_owned()
     }
 
     fn tool_tip(&self) -> ToolTip {
