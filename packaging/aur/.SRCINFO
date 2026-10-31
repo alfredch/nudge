@@ -1,0 +1,24 @@
+pkgbase = nudge-desktop
+	pkgdesc = Unofficial Pushover Open Client for the Linux desktop (not supported by Pushover)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/alfredch/nudge
+	arch = x86_64
+	arch = aarch64
+	license = MIT OR Apache-2.0
+	makedepends = cargo
+	depends = alsa-lib
+	depends = glibc
+	depends = hicolor-icon-theme
+	depends = libgcc
+	optdepends = wl-clipboard: Copy button on Wayland
+	optdepends = xclip: Copy button on X11
+	optdepends = gnome-shell-extension-appindicator: tray icon on GNOME
+	provides = nudge
+	conflicts = nudge
+	options = !lto
+	options = !debug
+	source = nudge-0.1.0.tar.gz::https://github.com/alfredch/nudge/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 74ee49a05f02104d8fb245eda530de89c8ea62a0d352b69c4c53a81c2fa6bdb3
+
+pkgname = nudge-desktop
