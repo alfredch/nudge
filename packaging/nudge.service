@@ -1,0 +1,15 @@
+# Installed by the nudge package. Enable it with `nudge install-service`.
+[Unit]
+Description=Nudge, unofficial Pushover Open Client
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/nudge daemon
+Restart=on-failure
+RestartSec=10
+# 69: another daemon is running, 78: login needed. Restarting won't help.
+RestartPreventExitStatus=69 78
+
+[Install]
+WantedBy=graphical-session.target

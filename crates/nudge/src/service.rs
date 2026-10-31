@@ -8,18 +8,30 @@ use anyhow::{Context, Result, bail};
 use crate::paths::APP_ID;
 
 const UNIT: &str = "nudge.service";
+/// First line of unit files written by this command; other files with the
+/// same name are the user's own and are never touched.
+const HEADER: &str =
+    "# Written by `nudge install-service`; remove with `nudge uninstall-service`.\n";
+/// Installed by the packages (`packaging/nudge.service`), for `/usr/bin/nudge`.
+const PACKAGED_UNIT: &str = "/usr/lib/systemd/user/nudge.service";
+const PACKAGED_EXE: &str = "/usr/bin/nudge";
 
 fn unit_path() -> Result<PathBuf> {
     let dirs = directories::BaseDirs::new().context("cannot determine the home directory")?;
     Ok(dirs.config_dir().join("systemd/user").join(UNIT))
 }
 
-/// The unit file. It starts with the graphical session, so the display,
-/// the notification server and the tray host are there.
+/// The unit written for `exe`.
 fn unit(exe: &Path) -> String {
+    format!("{HEADER}{}", unit_body(exe))
+}
+
+/// The unit file without its comment. It starts with the graphical
+/// session, so the display, the notification server and the tray host are
+/// there.
+fn unit_body(exe: &Path) -> String {
     format!(
         "\
-# Written by `nudge install-service`; remove with `nudge uninstall-service`.
 [Unit]
 Description=Nudge, unofficial Pushover Open Client
 PartOf=graphical-session.target
@@ -83,12 +95,32 @@ pub async fn install() -> Result<()> {
     }
 
     let path = unit_path()?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let ours = written_by_us(&path)?;
+    if ours == Some(false) {
+        bail!(
+            "{} exists and was not written by nudge; it overrides any other nudge.service. \
+             Remove or rename it, then run this command again.",
+            path.display()
+        );
     }
-    std::fs::write(&path, unit(&exe))
-        .with_context(|| format!("cannot write {}", path.display()))?;
-    println!("Wrote {}", path.display());
+    if exe == Path::new(PACKAGED_EXE) && Path::new(PACKAGED_UNIT).is_file() {
+        // The package ships the unit; an earlier file of ours would
+        // override it (and may point at an old binary).
+        if ours == Some(true) {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("cannot remove {}", path.display()))?;
+            println!("Removed the previous {}", path.display());
+        }
+        println!("Using {PACKAGED_UNIT}");
+    } else {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("cannot create {}", dir.display()))?;
+        }
+        std::fs::write(&path, unit(&exe))
+            .with_context(|| format!("cannot write {}", path.display()))?;
+        println!("Wrote {}", path.display());
+    }
 
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", UNIT])?;
@@ -99,17 +131,33 @@ pub async fn install() -> Result<()> {
     Ok(())
 }
 
+/// Disables and stops the service. Removes the unit file only if this
+/// command wrote it; the packaged unit stays (the package owns it).
 pub fn uninstall() -> Result<()> {
     let path = unit_path()?;
-    if !path.exists() {
-        println!("{} is not installed.", path.display());
+    let ours = written_by_us(&path)?;
+    if ours.is_none() && !Path::new(PACKAGED_UNIT).is_file() {
+        println!("The nudge service is not installed.");
         return Ok(());
     }
     systemctl(&["disable", "--now", UNIT])?;
-    std::fs::remove_file(&path).with_context(|| format!("cannot remove {}", path.display()))?;
-    systemctl(&["daemon-reload"])?;
-    println!("Stopped nudge and removed {}", path.display());
+    if ours == Some(true) {
+        std::fs::remove_file(&path).with_context(|| format!("cannot remove {}", path.display()))?;
+        systemctl(&["daemon-reload"])?;
+        println!("Stopped nudge and removed {}", path.display());
+    } else {
+        println!("Stopped nudge; it no longer starts with your session.");
+    }
     Ok(())
+}
+
+/// `None` if there is no user unit file, else whether this command wrote it.
+fn written_by_us(path: &Path) -> Result<Option<bool>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text.starts_with(HEADER))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
 }
 
 fn systemctl(args: &[&str]) -> Result<()> {
@@ -153,6 +201,28 @@ mod tests {
         assert!(u.contains("ExecStart=/usr/bin/nudge daemon\n"));
         assert!(u.contains("RestartPreventExitStatus=69 78"));
         assert!(u.contains("WantedBy=graphical-session.target"));
+    }
+
+    /// The packaged unit must match what `install-service` would write for
+    /// `/usr/bin/nudge`, apart from the comment.
+    #[test]
+    fn packaged_unit_matches() {
+        let packaged = include_str!("../../../packaging/nudge.service");
+        let (comment, body) = packaged.split_once('\n').unwrap();
+        assert!(comment.starts_with('#'));
+        assert!(!packaged.starts_with(HEADER));
+        assert_eq!(body, unit_body(Path::new(PACKAGED_EXE)));
+    }
+
+    #[test]
+    fn ownership() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(UNIT);
+        assert_eq!(written_by_us(&path).unwrap(), None);
+        std::fs::write(&path, unit(Path::new("/x/nudge"))).unwrap();
+        assert_eq!(written_by_us(&path).unwrap(), Some(true));
+        std::fs::write(&path, "[Unit]\n").unwrap();
+        assert_eq!(written_by_us(&path).unwrap(), Some(false));
     }
 
     #[test]
