@@ -7,6 +7,8 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-31
+
 ### Added
 - Cargo-Workspace mit `nudge-api` (Library) und `nudge` (Binary).
 - `nudge-api`: HTTP-Client für Login (inkl. 2FA), Geräteregistrierung, Abruf,
@@ -39,3 +41,6 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Eigene Icons (App und Tray), `.desktop`-Datei, systemd-User-Unit im Paket.
 - Pakete: `.deb` für amd64 und arm64, AUR-Paket `nudge-desktop`, Tarballs. CI mit GitHub Actions.
 - README (englisch) mit Lizenzhinweis, Einrichtung und Datenschutz.
+
+[Unreleased]: https://github.com/alfredch/nudge/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/alfredch/nudge/releases/tag/v0.1.0
