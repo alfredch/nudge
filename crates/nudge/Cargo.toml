@@ -37,3 +37,28 @@ tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
+
+[package.metadata.deb]
+maintainer = "Alfred Keller <7837789+alfredch@users.noreply.github.com>"
+copyright = "2026, Alfred Keller"
+license-file = ["../../LICENSE-MIT", "0"]
+extended-description = """\
+Receives Pushover messages in real time over the Open Client API and shows \
+them as native desktop notifications, with sounds, emergency \
+acknowledgement, a tray icon and a local history. Not released or \
+supported by Pushover. Each user needs a Pushover for Desktop license."""
+section = "net"
+priority = "optional"
+depends = "$auto"
+recommends = "wl-clipboard | xclip"
+suggests = "gnome-shell-extension-appindicator"
+assets = [
+    ["target/release/nudge", "usr/bin/", "755"],
+    ["../../packaging/nudge.service", "usr/lib/systemd/user/", "644"],
+    ["../../packaging/io.github.alfredch.Nudge.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/icons/scalable/apps/io.github.alfredch.Nudge.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../packaging/icons/symbolic/apps/*", "usr/share/icons/hicolor/symbolic/apps/", "644"],
+    ["../../packaging/config.toml", "usr/share/doc/nudge/config.toml.example", "644"],
+    ["../../README.md", "usr/share/doc/nudge/", "644"],
+    ["../../CHANGELOG.md", "usr/share/doc/nudge/", "644"],
+]
