@@ -118,7 +118,8 @@ impl Conditions {
 pub fn display_for(message: &Message, conditions: Conditions) -> Option<Display> {
     let (urgency, persistent) = match message.priority {
         i8::MIN..=-2 => return None,
-        // An emergency already acknowledged elsewhere is treated as high priority.
+        // Unacknowledged emergencies always get through; an acknowledged one
+        // falls through to the last arm and counts as priority 1.
         _ if message.requires_persistent_display() => (Urgency::Critical, true),
         _ if conditions.paused => return None,
         -1 => (Urgency::Low, false),
