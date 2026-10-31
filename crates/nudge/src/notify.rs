@@ -239,7 +239,9 @@ impl Notifier {
             (true, false) => html_to_text(&message.message),
             (false, _) => self.text(&message.message),
         };
-        if let Some(url) = &message.url {
+        let link = message.url.as_deref().and_then(web_url);
+        // Show the completed link, so servers that detect URLs make it clickable.
+        if let Some(url) = link.as_deref().or(message.url.as_deref()) {
             let label = message.url_title.as_deref().unwrap_or(url);
             body.push_str("\n\n");
             body.push_str(&self.text(label));
@@ -249,7 +251,6 @@ impl Notifier {
             }
         }
 
-        let link = message.url.as_deref().and_then(web_url);
         let mut actions = Vec::new();
         if self.inner.actions {
             if display.persistent && message.can_acknowledge() {
