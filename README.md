@@ -49,7 +49,8 @@ sudo apt install ./nudge_*.deb
 
 ### Arch Linux
 
-Install the `nudge` package from the AUR, for example with `paru -S nudge`.
+Install the `nudge-desktop` package from the AUR, for example with
+`paru -S nudge-desktop`. (The AUR package `nudge` is an unrelated app.)
 
 ### From source
 
