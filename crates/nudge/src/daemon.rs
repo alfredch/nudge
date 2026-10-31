@@ -264,18 +264,27 @@ impl Daemon {
             Mode::Backlog => info!("fetched {total} pending message(s), {new_count} new"),
             Mode::Live => debug!("fetched {total} message(s), {new_count} new"),
         }
-        if new_count < total {
-            info!(
-                "{} message(s) already in history, not shown again",
-                total - new_count
-            );
-        }
 
-        let mut new: Vec<&Message> = fetched
+        // The server repeats an unacknowledged emergency by delivering the
+        // same message (same id) again, so known emergencies are shown again.
+        let (mut new, known): (Vec<&Message>, Vec<&Message>) = fetched
             .messages
             .iter()
-            .filter(|m| inserted.messages.contains(&m.id))
-            .collect();
+            .partition(|m| inserted.messages.contains(&m.id));
+        let (repeated, skipped): (Vec<&Message>, Vec<&Message>) = known
+            .into_iter()
+            .partition(|m| m.requires_persistent_display());
+        for m in &repeated {
+            info!(
+                "message {} repeated by the server, not yet acknowledged",
+                m.id
+            );
+        }
+        let skipped = skipped.len() + fetched.malformed.len() - inserted.malformed;
+        if skipped > 0 {
+            info!("{skipped} message(s) already in history, not shown again");
+        }
+        new.extend(repeated);
         // While offline, an emergency may have been repeated many times:
         // show only its latest copy.
         let latest = latest_per_receipt(&new);

@@ -35,10 +35,10 @@ Ergänzt `PLAN.md`. Bei Widerspruch gilt dieses Dokument.
 ## Offene Punkte
 
 - Flatpak: später.
-- Wie Emergency-Wiederholungen beim Client ankommen (neue `id` mit gleichem `receipt`?), steht nicht in der Doku. nudge ersetzt die Notification über den Receipt. Beim M4-Test prüfen und hier festhalten.
 
 ## Verifiziert am echten Server (2026-10-30, `cargo test -p nudge-api --test live -- --ignored`)
 
 - TLS und WebSocket zu `wss://client.pushover.net/push` funktionieren mit rustls/aws-lc-rs.
 - Ungültiges Gerät oder Secret am WebSocket: Frame `E`, danach schließt der Server.
 - Ungültiges Secret bei `GET /1/messages.json`: HTTP 403, `errors: ["secret is invalid"]`. Ein 4xx bei bestehender Session heißt also: Re-Login nötig.
+- Emergency-Wiederholungen (2026-10-31, Retry 30 s): Der Server liefert die **gleiche Meldung mit gleicher `id`** im Retry-Abstand erneut aus, auch nachdem sie gelöscht wurde. nudge zeigt eine bekannte, unquittierte Meldung mit Priorität 2 deshalb erneut (ersetzt über den Receipt, mit Ton).
