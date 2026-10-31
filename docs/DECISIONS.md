@@ -30,6 +30,10 @@ Ergänzt `PLAN.md`. Bei Widerspruch gilt dieses Dokument.
 | Ruhezeiten | Priorität -1 und 0 werden still zugestellt: Urgency low, kein Ton. Priorität 1 und 2 sind nicht betroffen. Keine Ausnahmen pro App (wer durchkommen will, sendet mit Priorität 1). |
 | Kopieren | Über `wl-copy` (Wayland) oder `xclip` (X11/Xwayland). Der Button erscheint nur, wenn eines davon installiert ist. Paket: `Recommends: wl-clipboard`. |
 | Notifications | Direkt über zbus statt notify-rust: eine Verbindung für `Notify` und die Action-Signale, keine `unwrap()` in Fremdcode. |
+| Pause | Priorität -1 bis 1 geht nur in den Verlauf. Am Ende der Pause, auch bei vorzeitigem „Resume“, kommt eine Sammel-Notification „N messages while paused“. Notfälle (Priorität 2) kommen immer durch, mit Ton. Die Pause lebt nur im Speicher und endet mit einem Neustart des Daemons. |
+| Tray | ksni (StatusNotifierItem). Kein Schalter für Ruhezeiten, dafür gibt es Pause. Icons vorerst aus dem Icon-Theme (Adwaita), eigene Icons kommen in M6. |
+| Verlauf ansehen | „Open history“ erzeugt eine HTML-Seite (`~/.cache/nudge/history.html`, 0600, CSP ohne Skripte) und öffnet sie über das Desktop-Portal `OpenURI.OpenFile` mit einem Dateideskriptor. Snap-Browser können `~/.cache` nicht lesen, das Portal reicht die Datei aber durch (getestet mit Chromium-Snap). Fallback ist `xdg-open`. |
+| D-Bus-Schnittstelle | `io.github.alfredch.Nudge1` unter `/io/github/alfredch/Nudge`: `Status() → s` (JSON), `Pause(t Sekunden, 0 = bis Resume)`, `Resume()`. Die CLI nutzt 5 s Timeout. Exit-Code 3, wenn kein Daemon läuft. |
 | Sounds | rodio, das Audiogerät wird pro Sound geöffnet. Ohne `sound`-Feld wird `sound.default` gespielt (Default `pushover`, wie in der Message-API dokumentiert). Still sind `no`/`none` und `vi`/`vibrate`. Verifiziert am 2026-10-31: Meldungen tragen zweistellige Codes, nicht die Namen aus der Message-API. „None (silent)“ kommt als `no` an, „Vibrate Only“ als `vi`, „Bike“ als `bk` (`sounds/bk.mp3` existiert). Laufzeitabhängigkeit: libasound2. |
 
 ## Offene Punkte

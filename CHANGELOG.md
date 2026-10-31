@@ -30,3 +30,9 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Konfigurationsdatei `~/.config/nudge/config.toml`, neu laden mit `SIGHUP`. Beispiel: `packaging/config.toml`.
 - Ruhezeiten: Priorität -1 und 0 kommen still an.
 - Aufbewahrungsdauer für den Verlauf (Default 365 Tage).
+- Tray-Icon (StatusNotifierItem): Verbindungs- und Pausenstatus, unquittierte Notfälle, letzte Meldungen,
+  Verlauf als HTML-Seite, Pause/Fortsetzen, Beenden.
+- `nudge status`, `nudge pause [DAUER]`, `nudge resume` (über D-Bus) und `nudge history`
+  (`--app`, `--since`, `-n`, `--json`).
+- Pause: Meldungen bis Priorität 1 nur in den Verlauf, Sammel-Notification am Ende, Notfälle kommen durch.
+- `nudge install-service` / `uninstall-service`: systemd-User-Unit, startet mit der Desktop-Sitzung.
