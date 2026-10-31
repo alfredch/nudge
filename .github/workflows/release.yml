@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    # Built on Ubuntu 22.04 (glibc 2.35), so the binaries run on older systems too.
+    container: ubuntu:22.04
+    steps:
+      - name: System dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl dpkg-dev git libasound2-dev pkg-config
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup toolchain install
+      - run: cargo install cargo-deb --locked --version 3.8.0
+      - name: Build .deb
+        run: cargo deb -p nudge -- --locked
+      - name: Build tarball
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="nudge-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp target/release/nudge README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cp -r packaging "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          cp target/debian/*.deb dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      # A draft: check it on GitHub, then publish it there.
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --draft \
+            --title "Nudge ${GITHUB_REF_NAME#v}" \
+            --notes "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${GITHUB_REF_NAME}/CHANGELOG.md). Nudge is an unofficial Pushover Open Client; each user needs a Pushover for Desktop license."
