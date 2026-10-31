@@ -25,7 +25,12 @@ Ergänzt `PLAN.md`. Bei Widerspruch gilt dieses Dokument.
 | Credentials | `oo7` (Secret Service über zbus), Fallback auf Datei mit `0600` unter `~/.local/state/nudge/` mit Warnung |
 | Gerätename | Default: Hostname, bereinigt und gekürzt. Beim Login änderbar. |
 | Toolchain | `rust-toolchain.toml` mit fester Version 1.99.1, Edition 2024 |
-| Releases | glibc, x86_64 und aarch64, `.deb` (cargo-deb) und AUR (PKGBUILD) |
+| Releases | glibc, x86_64 und aarch64, `.deb` (cargo-deb) und AUR (PKGBUILD). Gebaut in Ubuntu 22.04 (glibc 2.35) als Container auf den nativen GitHub-Runnern. Handgeschriebene Workflows statt cargo-dist: `.deb`, Tarball und AUR passen so ohne Zusatzwerkzeug. Der Release-Workflow erzeugt nur einen Entwurf; veröffentlicht wird von Hand. |
+| AUR-Paket | `nudge-desktop`, weil `nudge` im AUR schon vergeben ist (Electron-App, ebenfalls `/usr/bin/nudge`, daher `conflicts`). Das Programm heißt weiter `nudge`. |
+| README | Englisch. Die Doku in `docs/` bleibt deutsch. |
+| Veröffentlichung | Erst lokal fertig und getestet; Repo anlegen, Push, Tag und Release erst nach Rückfrage. |
+| systemd-Unit | Das Paket installiert `/usr/lib/systemd/user/nudge.service`, aktiviert sie aber nicht (vor `nudge login` würde sie mit 78 enden). `install-service` aktiviert sie und entfernt eine eigene, ältere Unit unter `~/.config/systemd/user/`, die sonst Vorrang hätte. |
+| Icons | Eigene SVGs (Glocke mit Bewegungsbögen), nicht das Pushover-Logo. Das Tray nutzt sie, wenn sie installiert sind, sonst Adwaita-Icons. |
 | Git | Haupt-Branch `main` |
 | Ruhezeiten | Priorität -1 und 0 werden still zugestellt: Urgency low, kein Ton. Priorität 1 und 2 sind nicht betroffen. Keine Ausnahmen pro App (wer durchkommen will, sendet mit Priorität 1). |
 | Kopieren | Über `wl-copy` (Wayland) oder `xclip` (X11/Xwayland). Der Button erscheint nur, wenn eines davon installiert ist. Paket: `Recommends: wl-clipboard`. |

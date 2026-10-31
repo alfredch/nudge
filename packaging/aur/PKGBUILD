@@ -11,13 +11,17 @@ pkgdesc="Unofficial Pushover Open Client for the Linux desktop (not supported by
 arch=('x86_64' 'aarch64')
 url="https://github.com/alfredch/nudge"
 license=('MIT OR Apache-2.0')
-depends=('alsa-lib' 'gcc-libs' 'glibc')
+depends=('alsa-lib' 'glibc' 'hicolor-icon-theme' 'libgcc')
 makedepends=('cargo')
 optdepends=(
   'wl-clipboard: Copy button on Wayland'
   'xclip: Copy button on X11'
   'gnome-shell-extension-appindicator: tray icon on GNOME'
 )
+# makepkg's LTO turns aws-lc's C objects into GCC bitcode the Rust linker
+# cannot read (undefined aws_lc_* symbols); Cargo's own LTO stays on.
+# No debug package: the release profile already strips symbols.
+options=('!lto' '!debug')
 provides=("$_name")
 conflicts=("$_name")
 source=("$_name-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")

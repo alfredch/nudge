@@ -36,3 +36,6 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   (`--app`, `--since`, `-n`, `--json`).
 - Pause: Meldungen bis Priorität 1 nur in den Verlauf, Sammel-Notification am Ende, Notfälle kommen durch.
 - `nudge install-service` / `uninstall-service`: systemd-User-Unit, startet mit der Desktop-Sitzung.
+- Eigene Icons (App und Tray), `.desktop`-Datei, systemd-User-Unit im Paket.
+- Pakete: `.deb` für amd64 und arm64, AUR-Paket `nudge-desktop`, Tarballs. CI mit GitHub Actions.
+- README (englisch) mit Lizenzhinweis, Einrichtung und Datenschutz.
