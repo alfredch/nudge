@@ -23,7 +23,9 @@ const QUEUE: usize = 4;
 const MAX_LENGTH: Duration = Duration::from_secs(30);
 
 /// Sound names that mean silence.
-const SILENT: [&str; 2] = ["none", "vibrate"];
+/// Messages carry short codes (verified: "None (silent)" arrives as "no",
+/// "Bike" as "bk"); the long names are accepted for the configured default.
+const SILENT: [&str; 3] = ["no", "none", "vibrate"];
 
 /// Name of the sound to play for a message, or `None` for silence.
 /// Priority -1 is silent by definition, and so are -1/0 during quiet hours.
@@ -131,6 +133,7 @@ mod tests {
     fn silent_cases() {
         let c = config::Sound::default();
         for json in [
+            serde_json::json!({"id": 1, "sound": "no"}),
             serde_json::json!({"id": 1, "sound": "none"}),
             serde_json::json!({"id": 1, "sound": "vibrate"}),
             serde_json::json!({"id": 1, "priority": -1}),
