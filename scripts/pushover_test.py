@@ -47,7 +47,7 @@ def send(cred: dict[str, str], title: str, message: str, **extra: str | int) -> 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("step", choices=["live", "silent", "html", "backlog", "restart"])
-    ap.add_argument("--env", type=Path, default=Path.home() / "PycharmProjects/TradingSupervisor/.env")
+    ap.add_argument("--env", type=Path, default=Path(__file__).resolve().parent.parent / ".env")
     args = ap.parse_args()
     cred = load_env(args.env)
     stamp = f"{datetime.now():%H:%M:%S}"

@@ -835,7 +835,7 @@ mod tests {
         let w = |u: &str| web_url(u);
         assert_eq!(w("https://x.org/a").as_deref(), Some("https://x.org/a"));
         assert_eq!(w("http://x.org").as_deref(), Some("http://x.org"));
-        assert_eq!(w("veltronza.com").as_deref(), Some("https://veltronza.com"));
+        assert_eq!(w("example.com").as_deref(), Some("https://example.com"));
         assert_eq!(
             w(" www.x.org/a?b=1 ").as_deref(),
             Some("https://www.x.org/a?b=1")

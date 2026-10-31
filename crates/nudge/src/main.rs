@@ -25,6 +25,11 @@ use tracing_subscriber::EnvFilter;
 
 use crate::paths::Paths;
 
+/// The API terms require this notice wherever the client identifies itself.
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (unofficial Pushover Open Client, not released or supported by Pushover)"
+);
 const ABOUT: &str = "Unofficial Pushover Open Client for the Linux desktop.\n\
                      Not released or supported by Pushover.";
 
@@ -35,7 +40,7 @@ const EXIT_NEEDS_LOGIN: u8 = 78;
 const EXIT_ALREADY_RUNNING: u8 = 69;
 
 #[derive(Parser)]
-#[command(version, about = ABOUT, long_about = None)]
+#[command(version = VERSION, about = ABOUT, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
