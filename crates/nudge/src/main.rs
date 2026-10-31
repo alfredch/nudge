@@ -12,6 +12,7 @@ mod instance;
 mod login;
 mod notify;
 mod paths;
+mod service;
 mod sound;
 mod status;
 mod tray;
@@ -61,6 +62,10 @@ enum Command {
     },
     /// End a pause and summarize the messages held back.
     Resume,
+    /// Start nudge with the desktop session (systemd user service).
+    InstallService,
+    /// Stop the service and remove it.
+    UninstallService,
     /// List received messages, oldest first.
     History {
         /// Only messages from this app.
@@ -100,6 +105,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Status => return cli::status(&paths).await,
         Command::Pause { duration } => return cli::pause(duration.as_deref()).await,
         Command::Resume => return cli::resume().await,
+        Command::InstallService => service::install().await?,
+        Command::UninstallService => service::uninstall()?,
         Command::History {
             app,
             since,
