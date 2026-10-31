@@ -24,6 +24,7 @@ use crate::notify::{self, Conditions, Notifier};
 use crate::paths::{APP_ID, Paths};
 use crate::sound;
 use crate::status::{Status, StatusTx, unix_now};
+use crate::tray;
 use crate::wake::{self, WakeReceiver};
 
 /// No keep-alive within this time means the connection is dead.
@@ -145,6 +146,7 @@ pub async fn run(paths: &Paths, user_agent: String) -> Result<Exit> {
         )
         .await
         .context("cannot register the D-Bus interface")?;
+    tray::spawn(control, status_rx).await;
     let mut sighup = signal(SignalKind::hangup())?;
     tokio::spawn(async move {
         while sighup.recv().await.is_some() {

@@ -14,6 +14,7 @@ mod notify;
 mod paths;
 mod sound;
 mod status;
+mod tray;
 mod wake;
 
 use std::process::ExitCode;
