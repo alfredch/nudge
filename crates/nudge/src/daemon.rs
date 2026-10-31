@@ -456,7 +456,7 @@ fn reload(path: &std::path::Path, config: &watch::Sender<Config>) {
             info!("configuration reloaded");
             config.send_replace(new);
         }
-        Err(e) => warn!("{e:#}; keeping the current configuration"),
+        Err(e) => warn!("configuration not reloaded, keeping the current one: {e:#}"),
     }
 }
 
