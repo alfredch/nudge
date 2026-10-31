@@ -75,8 +75,15 @@ impl Status {
         self.alerts.push(message.clone());
     }
 
-    pub fn remove_alert(&mut self, receipt: &Receipt) {
+    /// After a successful acknowledgement: no alert, and copies kept for
+    /// the menu no longer offer "Acknowledge".
+    pub fn acknowledged(&mut self, receipt: &Receipt) {
         self.alerts.retain(|m| m.receipt.as_ref() != Some(receipt));
+        for m in self.recent.iter_mut().chain(&mut self.held_back) {
+            if m.receipt.as_ref() == Some(receipt) {
+                m.acked = true;
+            }
+        }
     }
 
     /// Drops alerts that must have expired on the server. Returns whether
@@ -184,8 +191,10 @@ mod tests {
         assert!(s.expire_alerts(1000 + ALERT_LIFETIME));
         assert!(s.alerts.is_empty());
         s.add_alert(&m(1, 1000));
-        s.remove_alert(&Receipt::new("r"));
+        s.add_recent(&m(1, 1000));
+        s.acknowledged(&Receipt::new("r"));
         assert!(s.alerts.is_empty());
+        assert!(s.recent[0].acked);
     }
 
     #[test]

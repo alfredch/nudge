@@ -100,7 +100,7 @@ impl Handler {
         match result {
             Ok(()) => {
                 info!("message {} acknowledged", target.message);
-                self.status.send_modify(|s| s.remove_alert(receipt));
+                self.status.send_modify(|s| s.acknowledged(receipt));
                 if let Err(e) = self.notifier.close_receipt(receipt).await {
                     warn!("cannot close notification: {e:#}");
                 }

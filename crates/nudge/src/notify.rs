@@ -118,7 +118,8 @@ impl Conditions {
 pub fn display_for(message: &Message, conditions: Conditions) -> Option<Display> {
     let (urgency, persistent) = match message.priority {
         i8::MIN..=-2 => return None,
-        2.. => (Urgency::Critical, message.requires_persistent_display()),
+        // An emergency already acknowledged elsewhere is treated as high priority.
+        _ if message.requires_persistent_display() => (Urgency::Critical, true),
         _ if conditions.paused => return None,
         -1 => (Urgency::Low, false),
         0 if conditions.quiet => (Urgency::Low, false),
@@ -764,8 +765,8 @@ mod tests {
             d(2, 0).map(|d| (d.urgency, d.persistent)),
             Some((Urgency::Critical, true))
         );
-        // An already acknowledged emergency is shown, not held back.
-        assert_eq!(d(2, 1).map(|d| d.persistent), Some(false));
+        // An already acknowledged emergency is held back like priority 1.
+        assert_eq!(d(2, 1), None);
     }
 
     #[test]

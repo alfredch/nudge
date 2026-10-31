@@ -70,6 +70,11 @@ pub async fn install() -> Result<()> {
         println!("Stopping the temporary {UNIT} started with systemd-run.");
         systemctl(&["stop", UNIT])?;
     }
+    // A failed transient unit stays loaded and would still shadow the file.
+    let _ = Command::new("systemctl")
+        .args(["--user", "reset-failed", UNIT])
+        .stderr(std::process::Stdio::null())
+        .status();
     if property("ActiveState").as_deref() != Some("active") && daemon_running().await? {
         bail!(
             "a nudge daemon is already running outside systemd. Stop it first (Ctrl-C in its \
