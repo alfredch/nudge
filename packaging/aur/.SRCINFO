@@ -1,6 +1,6 @@
 pkgbase = nudge-desktop
 	pkgdesc = Unofficial Pushover Open Client for the Linux desktop (not supported by Pushover)
-	pkgver = 0.1.0
+	pkgver = 0.1.1
 	pkgrel = 1
 	url = https://github.com/alfredch/nudge
 	arch = x86_64
@@ -18,7 +18,7 @@ pkgbase = nudge-desktop
 	conflicts = nudge
 	options = !lto
 	options = !debug
-	source = nudge-0.1.0.tar.gz::https://github.com/alfredch/nudge/archive/refs/tags/v0.1.0.tar.gz
-	sha256sums = 74ee49a05f02104d8fb245eda530de89c8ea62a0d352b69c4c53a81c2fa6bdb3
+	source = nudge-0.1.1.tar.gz::https://github.com/alfredch/nudge/archive/refs/tags/v0.1.1.tar.gz
+	sha256sums = d374e640b898e0994c60324379f576a28d8545d4668f6594c8534ed9c0d92bbb
 
 pkgname = nudge-desktop

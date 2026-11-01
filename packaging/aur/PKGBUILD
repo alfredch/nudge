@@ -25,7 +25,7 @@ options=('!lto' '!debug')
 provides=("$_name")
 conflicts=("$_name")
 source=("$_name-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('d374e640b898e0994c60324379f576a28d8545d4668f6594c8534ed9c0d92bbb')
 
 prepare() {
   cd "$_name-$pkgver"
