@@ -7,6 +7,8 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-01
+
 ### Fixed
 - Das Tray-Icon fehlte nach dem Login, wenn der Tray-Host (unter GNOME die
   AppIndicator-Erweiterung) erst nach Nudge startete. Nudge wartet jetzt auf den
@@ -47,5 +49,6 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Pakete: `.deb` für amd64 und arm64, AUR-Paket `nudge-desktop`, Tarballs. CI mit GitHub Actions.
 - README (englisch) mit Lizenzhinweis, Einrichtung und Datenschutz.
 
-[Unreleased]: https://github.com/alfredch/nudge/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/alfredch/nudge/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/alfredch/nudge/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/alfredch/nudge/releases/tag/v0.1.0

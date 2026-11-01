@@ -5,7 +5,7 @@
 
 pkgname=nudge-desktop
 _name=nudge
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Unofficial Pushover Open Client for the Linux desktop (not supported by Pushover)"
 arch=('x86_64' 'aarch64')
@@ -25,7 +25,7 @@ options=('!lto' '!debug')
 provides=("$_name")
 conflicts=("$_name")
 source=("$_name-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('74ee49a05f02104d8fb245eda530de89c8ea62a0d352b69c4c53a81c2fa6bdb3')
+sha256sums=('SKIP')
 
 prepare() {
   cd "$_name-$pkgver"

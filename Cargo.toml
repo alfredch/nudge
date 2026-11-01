@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/nudge-api", "crates/nudge"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -11,7 +11,7 @@ repository = "https://github.com/alfredch/nudge"
 authors = ["Alfred Keller"]
 
 [workspace.dependencies]
-nudge-api = { path = "crates/nudge-api", version = "0.1.0" }
+nudge-api = { path = "crates/nudge-api", version = "0.1.1" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 directories = "6.0.0"
