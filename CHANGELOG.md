@@ -7,6 +7,11 @@ das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Fixed
+- Das Tray-Icon fehlte nach dem Login, wenn der Tray-Host (unter GNOME die
+  AppIndicator-Erweiterung) erst nach Nudge startete. Nudge wartet jetzt auf den
+  Host und zeigt das Icon, sobald er da ist, auch nach einem Neustart der Shell.
+
 ## [0.1.0] - 2026-10-31
 
 ### Added

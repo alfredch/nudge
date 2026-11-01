@@ -1,10 +1,14 @@
 //! Tray icon (StatusNotifierItem). GNOME needs the AppIndicator extension;
-//! without a tray host nudge runs on without it.
+//! without a tray host nudge runs on without it, and the icon appears as
+//! soon as a host shows up (e.g. when the shell extension loads after nudge
+//! at login, or after a shell restart).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ksni::menu::{StandardItem, SubMenu};
-use ksni::{Category, MenuItem, Status as ItemStatus, ToolTip, TrayMethods};
+use ksni::{Category, MenuItem, OfflineReason, Status as ItemStatus, ToolTip, TrayMethods};
 use nudge_api::Message;
 use tracing::{debug, info};
 
@@ -64,19 +68,27 @@ pub async fn spawn(control: Control, mut status: StatusRx) {
         debug!("nudge icons not installed, using theme icons");
         &FALLBACK_ICONS
     };
+    let host_missing = Arc::new(AtomicBool::new(false));
     let tray = Tray {
         status: status.borrow().clone(),
         control,
         icons,
+        host_missing: Arc::clone(&host_missing),
     };
-    let handle = match tray.spawn().await {
+    // At login the tray host (on GNOME a shell extension) often registers
+    // after nudge starts. With `assume_sni_available` a missing host is not
+    // an error: ksni waits for it and registers the icon when it appears.
+    let handle = match tray.assume_sni_available(true).spawn().await {
         Ok(handle) => handle,
         Err(e) => {
-            info!("no system tray available, running without tray icon: {e}");
+            info!("cannot start the tray icon, running without it: {e}");
             return;
         }
     };
-    info!("tray icon active");
+    // `watcher_offline` has already run if there was no host at startup.
+    if !host_missing.load(Ordering::Relaxed) {
+        info!("tray icon active");
+    }
     tokio::spawn(async move {
         while status.changed().await.is_ok() {
             let new = status.borrow_and_update().clone();
@@ -92,6 +104,8 @@ struct Tray {
     status: Status,
     control: Control,
     icons: &'static Icons,
+    /// Set while there is no tray host, so the log says when the icon shows.
+    host_missing: Arc<AtomicBool>,
 }
 
 impl Tray {
@@ -125,6 +139,23 @@ impl ksni::Tray for Tray {
 
     fn id(&self) -> String {
         "nudge".to_owned()
+    }
+
+    fn watcher_online(&self) {
+        self.host_missing.store(false, Ordering::Relaxed);
+        info!("tray host available, tray icon active");
+    }
+
+    /// Keeps the service running: the host may appear (again) later.
+    fn watcher_offline(&self, reason: OfflineReason) -> bool {
+        self.host_missing.store(true, Ordering::Relaxed);
+        match reason {
+            OfflineReason::Error(e) => {
+                info!("no system tray available yet, the icon appears when one starts: {e}");
+            }
+            _ => info!("system tray went away, the icon reappears when it is back"),
+        }
+        true
     }
 
     fn title(&self) -> String {
